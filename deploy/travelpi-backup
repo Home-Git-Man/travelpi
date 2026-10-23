@@ -1,0 +1,59 @@
+#!/bin/sh
+# Back the router up over SSH to the server named in /etc/travelpi/settings.json ("backup": "user@host"; ideally an
+# account that can only drop files, e.g. a forced command that accepts `put <name>` and `list`).
+#   settings – every run (nightly; small): Wi-Fi, VPN/Proton files, calibration, router data, Tailscale identity
+#   full     – every file on the Pi, weekly, and only while on the home Wi-Fi ("home_wifi") – never on hotel or phone data
+# Usage: travelpi-backup [full]     Status → /var/lib/travelpi/backup.json (shown on the screen and Sentinel)
+set -eu
+KEY=/root/.ssh/travelpi_backup
+setting() { python3 -c 'import json,sys; print(json.load(open("/etc/travelpi/settings.json")).get(sys.argv[1]) or "")' "$1" 2>/dev/null || true; }
+DEST=$(setting backup)
+HOME_WIFI=$(setting home_wifi)
+[ -n "$DEST" ] || { echo "no backup server set in /etc/travelpi/settings.json"; exit 0; }
+STATUS=/var/lib/travelpi/backup.json
+day=$(date +%F)
+put() { ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=30 "$DEST" "put $1"; }
+status() { python3 - "$@" <<'PY'
+import json, sys, time
+p = "/var/lib/travelpi/backup.json"
+try:
+    s = json.load(open(p))
+except Exception:
+    s = {}
+kind, result = sys.argv[1], sys.argv[2]
+if result == "ok":
+    s[kind + "_at"] = time.time()
+    s.pop("error", None)
+else:
+    s["error"] = f"{kind}: {result}"[:200]
+json.dump(s, open(p, "w"))
+PY
+}
+on_home() {   # uplink is the home Wi-Fi (not a hotel, not the phone)
+  [ -n "$HOME_WIFI" ] || return 1
+  python3 -c 'import json,sys; s=json.load(open("/run/travelpi/state.json")); u=s.get("uplink") or {}; sys.exit(0 if u.get("name")==sys.argv[1] and u.get("dev")=="wlup" and not s.get("on_backup") else 1)' "$HOME_WIFI" 2>/dev/null
+}
+
+# settings
+paths=""
+for p in etc/travelpi etc/NetworkManager/system-connections etc/NetworkManager/conf.d etc/netplan etc/systemd/network \
+         etc/dnsmasq.d etc/tor/torrc etc/sysctl.d/90-travelpi.conf etc/tmpfiles.d/travelpi.conf etc/systemd/journald.conf.d \
+         etc/systemd/system/travelpi.service etc/systemd/system/travelpi-rollback.service etc/systemd/system/travelpi-backup.service \
+         etc/systemd/system/travelpi-backup.timer etc/apt/apt.conf.d/52travelpi-upgrades etc/apt/apt.conf.d/20auto-upgrades \
+         boot/firmware/config.txt boot/firmware/cmdline.txt var/lib/travelpi var/lib/tailscale opt/travelpi root/.ssh \
+         var/ossec/etc/client.keys var/ossec/etc/ossec.conf; do
+  [ -e "/$p" ] && paths="$paths $p"
+done
+# shellcheck disable=SC2086
+if tar -C / -cf - $paths 2>/dev/null | zstd -q -19 | put "settings-$day.tar.zst"; then status settings ok
+else status settings "upload failed"; exit 1; fi
+
+# full (weekly, home Wi-Fi only – or forced with "full")
+last=$(python3 -c 'import json; print(int(json.load(open("/var/lib/travelpi/backup.json")).get("full_at", 0)))' 2>/dev/null || echo 0)
+if [ "${1:-}" = full ] || { [ $(( $(date +%s) - last )) -gt 604800 ] && on_home; }; then
+  if nice -n 19 ionice -c3 tar -C / --one-file-system --numeric-owner -cpf - \
+       --exclude=./proc --exclude=./sys --exclude=./dev --exclude=./run --exclude=./tmp --exclude=./mnt --exclude=./media \
+       --exclude=./var/cache/apt --exclude=./var/lib/apt/lists --exclude=./var/tmp --exclude=./swapfile --exclude=./var/swap \
+       . boot/firmware 2>/dev/null | zstd -q -3 -T2 | put "full-$day.tar.zst"; then status full ok
+  else status full "upload failed"; exit 1; fi
+fi

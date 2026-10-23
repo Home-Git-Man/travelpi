@@ -1,0 +1,11 @@
+#!/bin/sh
+# Get the newest TravelPi from GitHub and restart it (routers set up with install.sh). Usage: sudo travelpi-update
+set -eu
+cd /opt/travelpi
+[ -d .git ] || { echo "/opt/travelpi isn't a git copy – re-run install.sh instead"; exit 1; }
+before=$(git rev-parse HEAD)
+git pull -q --ff-only
+if [ "$(git rev-parse HEAD)" = "$before" ]; then echo "Already up to date."; exit 0; fi
+install -m 755 deploy/travelpi-update /usr/local/sbin/travelpi-update
+systemctl restart travelpi
+echo "Updated to $(git log -1 --format='%h %s') – restarted."

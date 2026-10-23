@@ -1,0 +1,13 @@
+[Unit]
+Description=Travel router – VPN kill switch, exit-node failover, hotel login and touch screen
+After=NetworkManager.service tailscaled.service
+Wants=tailscaled.service
+
+[Service]
+WorkingDirectory=/opt/travelpi
+ExecStart=/usr/bin/python3 -m travelpi
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

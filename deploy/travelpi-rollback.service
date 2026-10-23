@@ -1,0 +1,10 @@
+[Unit]
+Description=Roll back the travel-router network setup unless confirmed
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/travelpi-rollback
+
+[Install]
+WantedBy=multi-user.target

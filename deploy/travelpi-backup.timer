@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly travel router backup (catches up after the router was off)
+
+[Timer]
+OnCalendar=*-*-* 03:15
+RandomizedDelaySec=20min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

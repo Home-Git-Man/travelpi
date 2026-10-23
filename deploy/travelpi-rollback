@@ -1,0 +1,18 @@
+#!/bin/sh
+# Undo the travel-router network setup if nobody confirmed it within 7 minutes of boot.
+[ -f /etc/travelpi/net-confirmed ] && exit 0
+[ -f /etc/travelpi/rollback/saved ] || exit 0
+sleep 420
+[ -f /etc/travelpi/net-confirmed ] && exit 0
+BK=/etc/travelpi/rollback
+logger -t travelpi "network setup not confirmed – rolling back"
+rm -f /etc/systemd/network/10-wlup.link /etc/systemd/network/10-wlap.link /etc/NetworkManager/conf.d/90-travelpi.conf \
+      /etc/NetworkManager/system-connections/travel-ap.nmconnection /etc/dnsmasq.d/travelpi.conf
+[ -d "$BK/netplan" ] && rm -rf /etc/netplan && cp -a "$BK/netplan" /etc/netplan
+[ -d "$BK/nm-connections" ] && cp -a "$BK/nm-connections/." /etc/NetworkManager/system-connections/
+rm -f /etc/resolv.conf && cp -a "$BK/resolv.conf" /etc/resolv.conf
+systemctl disable travelpi dnsmasq travelpi-rollback
+nft delete table inet travelpi 2>/dev/null
+rm -f "$BK/saved"; touch /etc/travelpi/rolled-back
+update-initramfs -u >/dev/null 2>&1
+systemctl reboot

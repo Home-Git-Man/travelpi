@@ -1,0 +1,8 @@
+[Unit]
+Description=Back up the travel router over SSH (server from settings.json)
+After=network-online.target tailscaled.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/travelpi/deploy/travelpi-backup
+Nice=19
