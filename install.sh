@@ -9,11 +9,11 @@
 # Imager with your home Wi-Fi, a user and SSH; plus a USB Wi-Fi adapter that Linux supports out of the box.
 #
 # Run it on the Pi (over SSH):
-#   curl -fsSL https://raw.githubusercontent.com/OWNER/travelpi/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/Home-Git-Man/travelpi/main/install.sh | sudo bash
 # or from a copy of the code:   sudo bash install.sh
 # Run it again to upgrade or change answers; nothing is lost.
 set -euo pipefail
-REPO=${TRAVELPI_REPO:-https://github.com/OWNER/travelpi.git}
+REPO=${TRAVELPI_REPO:-https://github.com/Home-Git-Man/travelpi.git}
 DEST=/opt/travelpi
 ETC=/etc/travelpi
 

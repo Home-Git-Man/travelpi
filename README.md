@@ -33,7 +33,7 @@ the local Wi-Fi for you and keeps everyone behind a VPN with a kill switch.
 2. From a computer at home: `ssh <your-user>@<pi-name>.local`, then run
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/OWNER/travelpi/main/install.sh | sudo bash
+   curl -fsSL https://raw.githubusercontent.com/Home-Git-Man/travelpi/main/install.sh | sudo bash
    ```
 
    It asks for your travel Wi-Fi's name and password, your country, whether you have the screen, and whether to
