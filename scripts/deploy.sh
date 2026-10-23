@@ -5,7 +5,9 @@ cd "$(dirname "$0")/.."
 scripts/test.sh >/dev/null || { echo "tests failed – not deploying (run scripts/test.sh to see why)"; exit 1; }
 rsync -a --delete --rsync-path="sudo rsync" --exclude __pycache__ travelpi deploy travelpi:/opt/travelpi/
 # my router's own settings (Tailscale exits, backup server, Sentinel) – kept out of git in local/
-[ -f local/settings.json ] && rsync --rsync-path="sudo rsync" --chmod=F644 local/settings.json travelpi:/etc/travelpi/settings.json
+if [ -f local/settings.json ]; then
+  ssh travelpi 'sudo install -m 644 /dev/stdin /etc/travelpi/settings.json' < local/settings.json
+fi
 if [ "${1:-}" = "--setup" ]; then
   ssh travelpi 'sudo bash /opt/travelpi/deploy/setup-network.sh'
 else
