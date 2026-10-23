@@ -57,6 +57,16 @@ def set_upstreams(upstream: list[str], fallback: list[str]) -> None:
     call("/control/dns_config", {"upstream_dns": upstream, "fallback_dns": fallback, "bootstrap_dns": BOOTSTRAP})
 
 
+def set_rewrite(domain: str, answer: str) -> None:
+    """Make `domain` answer `answer` on the travel Wi-Fi ("" removes it) – e.g. "sentinel" → its Tailscale address."""
+    have = [r for r in call("/control/rewrite/list") or [] if r.get("domain") == domain]
+    for r in have:
+        if r.get("answer") != answer:
+            call("/control/rewrite/delete", {"domain": domain, "answer": r.get("answer")})
+    if answer and not any(r.get("answer") == answer for r in have):
+        call("/control/rewrite/add", {"domain": domain, "answer": answer})
+
+
 def pause(minutes: int) -> None:
     call("/control/protection", {"enabled": False, "duration": minutes * 60_000})
 

@@ -37,7 +37,8 @@ def public_state(net: Any) -> dict[str, Any]:
     st = {k: v for k, v in net.state.items() if k != "toast"}
     st["modes"] = net.modes
     st["name"] = NAME
-    st["vpns"] = [{"id": e["id"], "label": e["label"], "where": e["where"], "kind": e["kind"]} for e in net.exits]
+    st["vpns"] = [{"id": e["id"], "label": e["label"], "where": e["where"], "kind": e["kind"], "cc": e.get("cc", "")}
+                  for e in net.exits]
     st["countries"] = COUNTRY
     return st
 
@@ -82,6 +83,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
         if path == "/api/ap":
             return self._send(200, self.net.ap_info())
+        if path == "/api/settings":
+            return self._send(200, self.net.settings_view())
         if path == "/api/state":
             return self._send(200, public_state(self.net))
         if path == "/api/devices":
@@ -145,6 +148,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/vpn/remove":
                 n.remove_vpn(str(body.get("id") or ""))
                 return self._send(200, {"ok": True})
+            if path == "/api/settings":
+                n.apply_settings(body)
+                return self._send(200, {"ok": True, "restarting": True})
             if path == "/api/power" and body.get("action") in ("reboot", "poweroff"):
                 n.save_usage()
                 threading.Timer(2, subprocess.Popen, args=(["systemctl", body["action"]],)).start()

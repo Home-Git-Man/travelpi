@@ -19,7 +19,8 @@ from .geo import exit_country
 from .hw import hardware
 from . import adguard, stats
 from .config import (AP, AP_NET, TAILNET, BACKUP_AFTER, CHECK_EVERY, ETC, EXITS, FAILS_TO_SWITCH, MODES, PHONE_WARN, PRIMARY_RETRY,
-                     RESOLV, RETRY_PRIMARY, RUN, SETTINGS, TUNNEL_DNS, UPLINK, VAR, WIRED)
+                     RESOLV, RETRY_PRIMARY, RUN, SETTINGS, TUNNEL_DNS, UPLINK, VAR, WIRED, EDITABLE, clean_settings,
+                     load_settings, save_settings)
 
 log = logging.getLogger("travelpi.net")
 LOCAL_RULE = 4900          # ahead of Proton (5000) and Tailscale (5210+)
@@ -805,6 +806,27 @@ class Net:
             if len(f) >= 2 and f[1] == "connected" and (f[0] in (UPLINK, *WIRED) or is_phone_dev(f[0])):
                 out.append(f[0])
         return out
+
+    def settings_view(self) -> dict[str, Any]:
+        """What the settings sections of the phone page and Sentinel show."""
+        cur = load_settings()
+        return {"settings": {k: cur[k] for k in EDITABLE}, "tailscale": has_tailscale(),
+                "backup": bool(cur.get("backup")), "home_wifi": cur.get("home_wifi", "")}
+
+    def apply_settings(self, body: dict[str, Any]) -> None:
+        """Check and save changed settings, then restart the controller so they take effect (a few seconds; the
+        travel Wi-Fi itself stays up). Raises ValueError for anything not allowed."""
+        cur = load_settings()
+        new = clean_settings(body, cur, taken={e["id"] for e in self.exits if e["kind"] == "wg"})
+        save_settings(new)
+        if new["sentinel"] != cur.get("sentinel"):
+            try:
+                adguard.set_rewrite("sentinel", new["sentinel"])
+            except Exception as e:
+                log.warning("sentinel name not updated in AdGuard: %s", e)
+        log.info("settings changed – restarting")
+        self.save_usage()
+        threading.Timer(2, subprocess.Popen, args=(["systemctl", "--no-block", "restart", "travelpi"],)).start()
 
     def ap_info(self) -> dict[str, str]:
         try:

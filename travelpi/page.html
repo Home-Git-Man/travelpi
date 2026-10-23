@@ -41,6 +41,7 @@
   select { width: 100%; font: 1rem inherit; padding: 11px; background: #000; color: var(--bright); border: 1px solid var(--line); }
   details { margin-top: 10px; } summary { color: var(--cyan); cursor: pointer; padding: 8px 0; }
   .stack > * { margin-top: 8px; } .help { font-size: .85rem; color: var(--muted); }
+  label.col { flex-direction: column; align-items: stretch; gap: 4px; }
 </style>
 </head>
 <body>
@@ -103,7 +104,10 @@ network (Settings → Wi-Fi → ⓘ):</p>
 
 <h2>Router</h2>
 <div class="card" id="router"><div class="muted">Loading…</div></div>
-<div class="row" style="margin-top:8px"><button id="reboot" class="amber">Reboot</button><button id="poweroff" class="red">Shut down</button></div>
+<div class="row" style="margin-top:8px"><button id="precheck">Pre-trip check</button><button id="reboot" class="amber">Reboot</button><button id="poweroff" class="red">Shut down</button></div>
+<details id="setbox"><summary>Router settings</summary>
+  <div class="stack" id="settings"><p class="muted">Loading…</p></div>
+</details>
 <p class="muted">This page works without the router's screen: join the travel Wi-Fi and open http://10.42.0.1 (or http://travelpi).</p>
 
 <div class="toast" id="toast"></div>
@@ -199,6 +203,45 @@ async function showBlocked() {
       `<div class="row" style="margin-top:8px"><input id="listurl" placeholder="https://… blocklist address" autocapitalize="off" autocorrect="off" style="flex:1"><button class="small" id="listadd">Add list</button></div>`;
   } catch (e) { $("adlist").innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
 }
+let cfg = null;
+async function loadSettings() {
+  try { cfg = await api("/api/settings"); renderSettings(); } catch (e) { $("settings").innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
+}
+function renderSettings() {
+  const c = cfg.settings, wg = (state.vpns || []).filter((v) => v.kind === "wg");
+  const order = [...new Set([...c.vpn_order.filter((cc) => wg.some((v) => v.cc === cc)), ...wg.map((v) => v.cc)])];
+  const name = (cc) => (wg.find((v) => v.cc === cc) || {}).label || cc.toUpperCase();
+  $("settings").innerHTML = `
+    <label class="col">Router name<input id="s-name" value="${esc(c.name)}" maxlength="24"></label>
+    <label class="col">Warn me after this much phone data in a day (GB)<input id="s-warn" type="number" min="0.1" max="500" step="0.1" value="${c.phone_warn_gb}"></label>
+    ${order.length > 1 ? `<div><b>Order Auto tries the VPN countries</b> <span class="help">(closest to you first)</span>
+      <div id="s-order">${order.map((cc, i) => `<div class="item" data-cc="${cc}"><div class="grow">${i + 1}. ${esc(name(cc))}</div>
+        ${i ? `<button class="small" data-up="${i}">▲ Up</button>` : ""}</div>`).join("")}</div></div>` : ""}
+    ${cfg.tailscale ? `<div><b>Tailscale exit nodes</b> <span class="help">(e.g. a computer at home, so streaming and banking apps see home)</span>
+      <div id="s-exits">${c.tailscale_exits.map((e, i) => exitRow(e, i)).join("")}</div>
+      ${c.tailscale_exits.length < 5 ? `<button class="small" id="s-addexit">+ Add exit node</button>` : ""}</div>` : ""}
+    <details><summary>Advanced</summary><div class="stack">
+      <label class="col">Fallback DNS server through the VPN (blank = public DNS)<input id="s-dns" value="${esc(c.dns_fallback)}" placeholder="e.g. 100.64.0.10"></label>
+      <label class="col">Sentinel dashboard address (blank = none)<input id="s-sentinel" value="${esc(c.sentinel)}" placeholder="Tailscale address"></label>
+      <p class="help">Nightly backup: ${cfg.backup ? "on" : "off"}${cfg.backup && cfg.home_wifi ? ` (full backups on "${esc(cfg.home_wifi)}")` : ""} – set up with the installer.</p></div></details>
+    <p class="help">Saving restarts the router's controller (about 10 seconds). The travel Wi-Fi stays up.</p>
+    <button class="green" id="s-save">Save settings</button>`;
+}
+function exitRow(e, i) {
+  return `<div class="row s-exit" data-i="${i}" data-id="${esc(e.id || "")}" data-text="${esc(e.text || "")}" style="margin-top:6px">
+    <input class="s-node" value="${esc(e.node || "")}" placeholder="machine name" autocapitalize="off" autocorrect="off" style="flex:2">
+    <input class="s-label" value="${esc(e.label || "")}" placeholder="label, e.g. Home" style="flex:1"><button class="small red" data-rmexit="${i}">✕</button></div>`;
+}
+function readSettings() {
+  const exits = [...document.querySelectorAll(".s-exit")].map((r) => ({ id: r.dataset.id || undefined, text: r.dataset.text || undefined,
+    node: r.querySelector(".s-node").value.trim(), label: r.querySelector(".s-label").value.trim() })).filter((e) => e.node);
+  const order = [...document.querySelectorAll("#s-order [data-cc]")].map((r) => r.dataset.cc);
+  const body = { name: $("s-name").value.trim(), phone_warn_gb: +$("s-warn").value, dns_fallback: $("s-dns").value.trim(), sentinel: $("s-sentinel").value.trim() };
+  if (order.length) body.vpn_order = [...order, ...cfg.settings.vpn_order.filter((cc) => !order.includes(cc))];
+  if (cfg.tailscale) body.tailscale_exits = exits;
+  return body;
+}
+
 async function addVpn() {
   const f = $("vpnfile").files[0], cc = $("vpncc").value, prov = $("vpnprov").value.trim() || "vpn";
   if (!f) return toast("Choose the .conf file first");
@@ -251,6 +294,20 @@ document.addEventListener("click", async (e) => {
       await api("/api/ap", { ssid, password });
       toast("Saved – join the new Wi-Fi in a few seconds"); return;
     }
+    else if (b.dataset.up) { const rows = [...document.querySelectorAll("#s-order [data-cc]")].map((r) => r.dataset.cc), i = +b.dataset.up;
+      [rows[i - 1], rows[i]] = [rows[i], rows[i - 1]]; cfg.settings = { ...cfg.settings, ...readSettings(), vpn_order: rows }; renderSettings(); return; }
+    else if (b.id === "s-addexit") { const body = readSettings(); cfg.settings = { ...cfg.settings, ...body, tailscale_exits: [...(body.tailscale_exits || []), { node: "", label: "" }] }; renderSettings(); return; }
+    else if (b.dataset.rmexit !== undefined) { b.closest(".s-exit").remove(); return; }
+    else if (b.id === "s-save") {
+      b.disabled = true; await api("/api/settings", readSettings());
+      toast("Saved – the router restarts its controller (about 10 seconds)"); setTimeout(() => { loadSettings(); b.disabled = false; }, 12000); return;
+    }
+    else if (b.id === "precheck") {
+      if (!confirm("Run the pre-trip check? Installs updates, tries every VPN and runs a speed test – about 5 minutes. Devices blip while each VPN is tried.")) return;
+      b.disabled = true; toast("Pre-trip check running – about 5 minutes");
+      const r = await api("/api/precheck", {}); const ex = r.report.exits || [];
+      toast(`Done: ${ex.filter((e) => e.ok).length}/${ex.length} VPNs working, ${r.report.updates_left ?? "?"} updates left`); b.disabled = false; return;
+    }
     else if (b.id === "reboot" || b.id === "poweroff") {
       if (!confirm(b.id === "reboot" ? "Reboot the router? Back in about a minute." : "Shut the router down? Unplug it after 30 seconds.")) return;
       await api("/api/power", { action: b.id }); toast(b.id === "reboot" ? "Rebooting…" : "Shutting down…"); return;
@@ -292,6 +349,7 @@ $("vpnfile").addEventListener("change", () => {    // guess the country from the
   if (!m) return;
   for (const part of m) { const cc = part.replace(/[^A-Za-z]/g, "").toLowerCase(); if ([...$("vpncc").options].some((o) => o.value === cc)) { $("vpncc").value = cc; break; } }
 });
+$("setbox").addEventListener("toggle", () => { if ($("setbox").open && !cfg) loadSettings(); });
 refresh(); loadDevices(); loadAp();
 setInterval(refresh, 3000);
 setInterval(loadDevices, 15000);

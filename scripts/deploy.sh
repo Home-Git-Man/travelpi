@@ -4,8 +4,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 scripts/test.sh >/dev/null || { echo "tests failed – not deploying (run scripts/test.sh to see why)"; exit 1; }
 rsync -a --delete --rsync-path="sudo rsync" --exclude __pycache__ travelpi deploy travelpi:/opt/travelpi/
-# my router's own settings (Tailscale exits, backup server, Sentinel) – kept out of git in local/
-if [ -f local/settings.json ]; then
+# my router's own settings (Tailscale exits, backup server, Sentinel) – kept out of git in local/. They can be changed
+# on the router's web page, so the router's copy wins: fetch it back; only push mine when the router has none.
+if ssh travelpi 'test -f /etc/travelpi/settings.json'; then
+  mkdir -p local && ssh travelpi 'cat /etc/travelpi/settings.json' > local/settings.json
+elif [ -f local/settings.json ]; then
   ssh travelpi 'sudo install -m 644 /dev/stdin /etc/travelpi/settings.json' < local/settings.json
 fi
 if [ "${1:-}" = "--setup" ]; then

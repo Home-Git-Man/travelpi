@@ -285,3 +285,27 @@ def test_settings_file(tmp_path):
     assert ts_exits(s) == [{"id": "nas", "kind": "ts", "node": "nas", "label": "nas", "where": "nas (Tailscale)"}]
     f.write_text("not json")
     assert load_settings(f) == DEFAULTS
+
+
+def test_settings_from_the_web_pages(tmp_path):
+    import json
+    from travelpi.config import DEFAULTS, clean_settings, load_settings, save_settings
+    cur = {**DEFAULTS, "backup": "user@host", "home_wifi": "home",
+           "tailscale_exits": [{"id": "home", "node": "my-exit-node", "label": "Home", "where": "Home internet", "text": "Home only"}]}
+    new = clean_settings({"name": " Smith Router ", "phone_warn_gb": "2.5", "vpn_order": ["US", "sg", "us"],
+                          "tailscale_exits": cur["tailscale_exits"] + [{"node": "Nas-Box", "label": "Gran's place"}],
+                          "dns_fallback": "100.64.0.10", "sentinel": "", "backup": "evil@x"}, cur, taken={"proton-sg"})
+    assert new["name"] == "Smith Router" and new["phone_warn_gb"] == 2.5 and new["vpn_order"] == ["us", "sg"]
+    assert new["tailscale_exits"][0] == cur["tailscale_exits"][0]                       # existing id/text kept
+    assert new["tailscale_exits"][1] == {"id": "gran-s-place", "node": "nas-box", "label": "Gran's place", "where": "Gran's place (Tailscale)"}
+    assert new["backup"] == "user@host"                                                  # not editable from the web
+    for bad in ({"name": ""}, {"name": "x" * 25}, {"phone_warn_gb": 0}, {"phone_warn_gb": "lots"}, {"vpn_order": ["usa"]},
+                {"vpn_order": "sg"}, {"dns_fallback": "dns.example"}, {"sentinel": "1.2.3"},
+                {"tailscale_exits": [{"node": "bad name"}]}, {"tailscale_exits": [{"node": "a", "id": "auto"}]},
+                {"tailscale_exits": [{"node": "a", "id": "proton-sg"}]}, {"tailscale_exits": [{"node": f"n{i}"} for i in range(6)]},
+                {"tailscale_exits": [{"node": "a", "label": "Home"}, {"node": "b", "label": "home"}]}):
+        with pytest.raises(ValueError):
+            clean_settings(bad, cur, taken={"proton-sg"})
+    f = tmp_path / "settings.json"
+    save_settings(new, f)
+    assert load_settings(f)["name"] == "Smith Router" and "junk" not in json.loads(f.read_text())
