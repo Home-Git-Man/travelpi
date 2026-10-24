@@ -392,13 +392,14 @@
       <p class="help" style="margin-top:14px">This page works without the router's screen: join the travel Wi-Fi and open http://10.42.0.1 (or http://travelpi).</p>
     </section>
 
-    <footer class="credit">Designed by <b>Smutsmedia</b> <span class="sp">//</span> TravelPi</footer>
+    <footer class="credit" id="credit"></footer>
   </main>
 </div>
 
 <div class="toast" id="toast"></div>
 <script>
 "use strict";
+const BRAND = "SMD Labs";            // the "Designed by" credit – change this one string to rebrand everywhere
 const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const gb = (n) => n >= 1e9 ? (n / 1e9).toFixed(2) + " GB" : Math.round(n / 1e6) + " MB";
@@ -958,6 +959,7 @@ $("tvlistbox").addEventListener("toggle", () => { if ($("tvlistbox").open) loadL
 $("tvfilter").addEventListener("change", loadGuide);
 $("livq").addEventListener("keydown", (e) => { if (e.key === "Enter") loadGuide(); });
 $("srvq").addEventListener("keydown", (e) => { if (e.key === "Enter") { srvStack = [{ view: "search", key: "", title: "Search results" }]; srvRender(); } });
+$("credit").innerHTML = `Designed by <b>${esc(BRAND)}</b> <span class="sp">//</span> TravelPi`;
 refresh(); loadDevices(); loadAp();
 setInterval(refresh, 3000);
 setInterval(loadDevices, 15000);
