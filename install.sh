@@ -49,7 +49,7 @@ env_value() {   # env_value KEY → its (shell-quoted) value in ap.env
   python3 -c 'import shlex,sys; e=dict(l.split("=",1) for l in open(sys.argv[1]).read().splitlines() if "=" in l); v=e.get(sys.argv[2],""); print(shlex.split(v)[0] if v.strip() else "")' "$ETC/ap.env" "$1"
 }
 old_ssid=$(env_value SSID)
-say "1/5 Your travel Wi-Fi (the network your family's devices join)"
+say "1/6 Your travel Wi-Fi (the network your family's devices join)"
 SSID=$(ask "Wi-Fi name" "${old_ssid:-TravelPi}")
 while :; do
   PSK=$(ask "Password, 8 or more characters (Enter = make one up / keep the current one)" "")
@@ -59,15 +59,15 @@ done
 [ -n "$PSK" ] || PSK=$(env_value PSK)
 [ -n "$PSK" ] || PSK=$(python3 -c 'import secrets; a="abcdefghjkmnpqrstuvwxyz23456789"; print("".join(secrets.choice(a) for _ in range(12)))')
 
-say "2/5 Wi-Fi country (sets which Wi-Fi channels are allowed – use your home country)"
+say "2/6 Wi-Fi country (sets which Wi-Fi channels are allowed – use your home country)"
 COUNTRY=$(ask "Two-letter country code" "$(iw reg get 2>/dev/null | sed -n 's/^country \([A-Z][A-Z]\).*/\1/p' | head -1 | sed 's/00//')")
 COUNTRY=${COUNTRY:-AU}
 
-say "3/5 Screen"
+say "3/6 Screen"
 SCREEN=n
 yes_no "Do you have the 3.5\" MHS / Waveshare-style SPI touch screen (ILI9486) on the pins?" n && SCREEN=y
 
-say "4/5 Tailscale (optional – reach home through your own Tailscale exit node, e.g. for home streaming apps)"
+say "4/6 Tailscale (optional – reach home through your own Tailscale exit node, e.g. for home streaming apps)"
 TS=n EXIT_NODE="" EXIT_LABEL=""
 if yes_no "Use Tailscale?" n; then
   TS=y
@@ -75,8 +75,27 @@ if yes_no "Use Tailscale?" n; then
   [ -z "$EXIT_NODE" ] || EXIT_LABEL=$(ask "Short name for it on the screen" "Home")
 fi
 
-say "5/5 Router name (shown on the screen and the phone page)"
+say "5/6 Router name (shown on the screen and the phone page)"
 NAME=$(ask "Name" "TravelPi")
+
+say "6/6 TV mode (optional – plug the router into a hotel TV: your films and shows from home, world TV channels)"
+TVMODE=n MEDIA=none MEDIA_URL="" MEDIA_KEY="" JF_USER=""
+if yes_no "Install TV mode (Kodi on the HDMI port)?" n; then
+  TVMODE=y
+  case "$(ask "Media server at home: plex, jellyfin or none" "none")" in
+    [Pp]*) MEDIA=plex
+      warn "The router reaches it over Tailscale – use the server's Tailscale address."
+      MEDIA_URL=$(ask "Plex address, e.g. http://100.x.y.z:32400" "")
+      echo "Plex token: in Plex Web open any film → ⋯ → Get Info → View XML; the token is X-Plex-Token=… in the address bar."
+      MEDIA_KEY=$(ask "Plex token" "") ;;
+    [Jj]*) MEDIA=jellyfin
+      warn "The router reaches it over Tailscale – use the server's Tailscale address."
+      MEDIA_URL=$(ask "Jellyfin address, e.g. http://100.x.y.z:8096" "")
+      echo "API key: Jellyfin Dashboard → API Keys → + (name it TravelPi)."
+      MEDIA_KEY=$(ask "Jellyfin API key" "")
+      JF_USER=$(ask "Your Jellyfin user name (whose 'continue watching' to show)" "") ;;
+  esac
+fi
 
 # ----- packages and code -----
 say "Installing packages (a few minutes)…"
@@ -138,8 +157,29 @@ fi
 # security updates, never an automatic reboot
 printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' > /etc/apt/apt.conf.d/20auto-upgrades
 
+# TV mode: media server login (root-only files, never shown in a browser)
+if [ "$MEDIA" = plex ] && [ -n "$MEDIA_URL" ] && [ -n "$MEDIA_KEY" ]; then
+  (umask 077; printf 'PLEX_URL=%s\nPLEX_TOKEN=%s\n' "${MEDIA_URL%/}" "$MEDIA_KEY" > "$ETC/plex.env")
+elif [ "$MEDIA" = jellyfin ] && [ -n "$MEDIA_URL" ] && [ -n "$MEDIA_KEY" ]; then
+  JF_ID=$(python3 - "${MEDIA_URL%/}" "$MEDIA_KEY" "$JF_USER" <<'PY2'
+import json, sys, urllib.request
+url, key, name = sys.argv[1:4]
+try:
+    req = urllib.request.Request(url + "/Users", headers={"X-Emby-Token": key})
+    users = json.load(urllib.request.urlopen(req, timeout=15))
+    pick = [u for u in users if u.get("Name", "").lower() == name.lower()] or users[:1]
+    print(pick[0]["Id"] if pick else "")
+except Exception as e:
+    print("", end="")
+    sys.stderr.write(f"couldn't reach Jellyfin yet ({e}) – set JELLYFIN_USER in /etc/travelpi/jellyfin.env later\n")
+PY2
+)
+  (umask 077; printf 'JELLYFIN_URL=%s\nJELLYFIN_KEY=%s\nJELLYFIN_USER=%s\n' "${MEDIA_URL%/}" "$MEDIA_KEY" "$JF_ID" > "$ETC/jellyfin.env")
+fi
+
 say "Setting up the router's network…"
 bash "$DEST/deploy/setup-network.sh"
+[ "$TVMODE" = y ] && { say "Installing TV mode (Kodi)…"; bash "$DEST/deploy/kodi-install.sh"; }
 
 if [ "$TS" = y ] && ! tailscale status >/dev/null 2>&1; then
   say "Sign this router in to Tailscale: open the link below on your phone or computer."

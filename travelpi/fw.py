@@ -12,12 +12,24 @@ outgoing MTU (the tunnel's is 1280, devices assume 1500, pages stall without it)
 to our dnsmasq (AdGuard), kids' devices to AdGuard Family (adult block + safe search, YouTube restricted).
 In every mode devices may reach the tailnet (Sentinel, home services) through tailscale0 – http://sentinel works.
 Uplinks (hotel Wi-Fi/Ethernet/phone): only replies, DHCP, ICMP and Tailscale's UDP get in – no SSH or web from
-the hotel network."""
+the hotel network. Kodi's web/JSON-RPC port (8080, TV mode) only answers on the Pi itself – remotes go through web.py."""
 from __future__ import annotations
+
+import pwd
 
 from .config import AP, AP_ADDR, AP_NET, KIDS_DNS, TAILNET, TOR_TRANS, UPLINK_PATTERNS
 
 POLICIES = ("tunnel", "open", "block", "tor", "wg")
+KODI_MARK = "0x33"                # Kodi's own internet traffic, routed through the VPN exit (see net.py _kodi_route)
+# private/local destinations Kodi reaches directly (home servers over Tailscale, the travel Wi-Fi, link-local)
+KODI_DIRECT = f"{{ 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, {TAILNET} }}"
+
+
+def _kodi_uid() -> int | None:
+    try:
+        return pwd.getpwnam("kodi").pw_uid
+    except KeyError:
+        return None                # TV mode not installed – no Kodi user to route
 
 
 def ruleset(policy: str, kids: list[str] | tuple[str, ...] = ()) -> str:
@@ -47,11 +59,20 @@ def ruleset(policy: str, kids: list[str] | tuple[str, ...] = ()) -> str:
         f'iifname "{p}" meta l4proto {{ icmp, ipv6-icmp }} accept\n    '
         f'iifname "{p}" udp dport {{ 68, 546, 41641 }} accept\n    '
         f'iifname "{p}" drop' for p in UPLINK_PATTERNS)
+    # mark Kodi's own internet-bound packets so the active VPN exit carries them (IPTV etc.); local/tailnet stay direct.
+    # Takes effect only while net.py has added the matching `ip rule fwmark` (i.e. a VPN exit is active).
+    uid = _kodi_uid()
+    kodi_out = (f"""  chain output {{
+    type route hook output priority mangle; policy accept;
+    meta skuid {uid} ip daddr != {KODI_DIRECT} meta mark set {KODI_MARK}
+  }}
+""" if uid is not None else "")
     return f"""table inet travelpi
 delete table inet travelpi
 table inet travelpi {{
   chain input {{
     type filter hook input priority -10; policy accept;
+    iifname != "lo" tcp dport 8080 drop
     {up_in}
   }}
   chain forward {{
@@ -70,6 +91,7 @@ table inet travelpi {{
   chain postrouting {{
     type nat hook postrouting priority 100; policy accept;
     ip saddr {AP_NET} oifname != "{AP}" masquerade
+    meta mark {KODI_MARK} oifname != "{AP}" masquerade
   }}
-}}
+{kodi_out}}}
 """

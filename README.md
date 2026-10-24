@@ -15,6 +15,9 @@ the local Wi-Fi for you and keeps everyone behind a VPN with a kill switch.
 - **Use the hotel's device limit to your advantage**: copy one device's address so a login made on it covers everyone.
 - **Tor mode**, **speed test**, unattended security updates.
 - Run it from a **3.5" touch screen** or from any **phone page** at `http://10.42.0.1` – a screen is optional.
+- **TV mode** (optional): plug the router into the hotel TV and run it from the phone page's remote – your films and
+  shows from **Plex or Jellyfin** at home (played directly, full quality, picks up where you left off) and free TV
+  channels from around the world (iptv-org's public list – pick countries, languages or News/Kids/Sport).
 
 ## What you need
 
@@ -44,6 +47,10 @@ the local Wi-Fi for you and keeps everyone behind a VPN with a kill switch.
    Downloads → WireGuard configuration → pick a free server → Create → download, then choose the file.
 
 Update later with `sudo travelpi-update`. To change answers, run the installer again.
+
+TV mode reaches your media server over Tailscale, so install Tailscale on the server at home too. Plex: add
+`100.64.0.0/10` to Settings → Network → LAN Networks so it counts as "at home". Jellyfin: create an API key in
+Dashboard → API Keys.
 
 ## On the road
 

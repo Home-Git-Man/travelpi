@@ -12,10 +12,12 @@ import json
 import logging
 import subprocess
 import threading
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from . import kodi, library
 from .config import AP_NET, ETC, NAME, WEB_PORT
 from .wg import COUNTRY
 
@@ -41,6 +43,9 @@ def public_state(net: Any) -> dict[str, Any]:
                   for e in net.exits]
     st["countries"] = COUNTRY
     return st
+
+
+KIDS_OK = {"/api/tv/remote", "/api/tv/channel", "/api/tv/play"}
 
 
 def kids_device(client_ip: str, leases: list[dict[str, str]], kids: set[str]) -> bool:
@@ -69,6 +74,8 @@ class Handler(BaseHTTPRequestHandler):
         if not allowed(ip, self.headers.get("X-Token", ""), self.token):
             self._send(403, {"error": "forbidden"})
             return False
+        if change and self.path.split("?")[0] in KIDS_OK:      # the TV remote is fine for everyone
+            return True
         if change and self.net.kids and kids_device(ip, self.net._leases(), self.net.kids):
             self._send(403, {"error": "Kids-mode devices can't change the router's settings"})
             return False
@@ -77,7 +84,26 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if not self._ok():
             return
-        path = self.path.split("?")[0]
+        path, _, query = self.path.partition("?")
+        qs = {k: v[0] for k, v in urllib.parse.parse_qs(query).items()}
+        try:
+            if path == "/api/tv/now":
+                return self._send(200, {**kodi.now_playing(), "library": library.name()})
+            if path == "/api/tv/lists":
+                src = kodi.current_sources()
+                return self._send(200, {"selected": src["codes"], "custom": src["custom"], "choices": kodi.LIST_CHOICES})
+            if path == "/api/tv/channels":
+                return self._send(200, {"channels": kodi.channels(qs.get("q", ""), qs.get("group", ""))})
+            if path == "/api/tv/groups":
+                names = {n.lower() for n in COUNTRY.values()}
+                return self._send(200, kodi.groups(names))
+            if path == "/api/library":
+                return self._send(200, library.browse(qs.get("view", ""), qs.get("key", ""), qs.get("q", "")))
+            if path == "/api/library/thumb":
+                data, ctype = library.thumb(qs.get("path", ""))
+                return self._send(200, data, ctype)
+        except ValueError as e:
+            return self._send(400, {"error": str(e)})
         if path == "/":
             confirm_setup(self.client_address[0])
             return self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
@@ -147,6 +173,22 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "id": name})
             if path == "/api/vpn/remove":
                 n.remove_vpn(str(body.get("id") or ""))
+                return self._send(200, {"ok": True})
+            if path == "/api/tv":
+                n.tv(str(body.get("action") or ""))
+                return self._send(200, {"ok": True})
+            if path == "/api/tv/remote":
+                kodi.press(str(body.get("button") or ""))
+                return self._send(200, {"ok": True})
+            if path == "/api/tv/lists":
+                restarted = kodi.set_sources(body.get("lists"), body.get("custom"))
+                return self._send(200, {"ok": True, "restarted": restarted})
+            if path == "/api/tv/channel":
+                kodi.play_channel(int(body.get("id") or 0))
+                return self._send(200, {"ok": True})
+            if path == "/api/tv/play":
+                url, resume = library.stream(str(body.get("key") or ""))
+                kodi.play_file(url, resume if body.get("resume", True) else 0)
                 return self._send(200, {"ok": True})
             if path == "/api/settings":
                 n.apply_settings(body)

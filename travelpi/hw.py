@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import re
 import shutil
 import subprocess
@@ -61,6 +62,14 @@ def _backup() -> dict[str, Any]:
         return {}
 
 
+def tv() -> dict[str, bool]:
+    """TV mode (Kodi on HDMI, deploy/kodi-install.sh): installed, running, TV plugged in."""
+    installed = os.path.exists("/etc/systemd/system/kodi.service")
+    hdmi = any(_read(str(f)) == "connected" for f in Path("/sys/class/drm").glob("card*-HDMI-A-*/status"))
+    return {"installed": installed, "running": installed and _sh("systemctl", "is-active", "kodi").strip() == "active",
+            "hdmi": hdmi}
+
+
 def hardware() -> dict[str, Any]:
     temp = _read("/sys/class/thermal/thermal_zone0/temp")
     thr = re.search(r"0x([0-9a-fA-F]+)", _sh("vcgencmd", "get_throttled"))
@@ -83,5 +92,6 @@ def hardware() -> dict[str, Any]:
         "tor": _sh("systemctl", "is-active", "tor").strip() == "active",
         "adapters": [a for a in (adapter(UPLINK), adapter(AP)) if a],
         "backup": _backup(),
+        "tv": tv(),
         "at": time.time(),
     }

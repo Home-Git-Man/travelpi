@@ -21,9 +21,22 @@ def to_rgb565(img: Image.Image) -> bytes:
     return v.astype("<u2").tobytes()
 
 
+def find_fb(base: Path = Path("/sys/class/graphics")) -> str:
+    """The 3.5" screen's framebuffer (fbtft driver, name like fb_ili9486). With HDMI video on (Kodi), the HDMI output
+    may take fb0 and push the little screen to fb1 – so look it up by name, not number."""
+    for d in sorted(base.glob("fb[0-9]*")):
+        try:
+            name = (d / "name").read_text().strip().lower()
+        except OSError:
+            continue
+        if name.startswith("fb_") or "ili94" in name or "fbtft" in name:
+            return f"/dev/{d.name}"
+    return "/dev/fb0"
+
+
 class Framebuffer:
-    def __init__(self, dev: str = "/dev/fb0"):
-        self.f = open(dev, "wb", buffering=0)
+    def __init__(self, dev: str | None = None):
+        self.f = open(dev or find_fb(), "wb", buffering=0)
 
     def show(self, img: Image.Image) -> None:
         self.f.seek(0)

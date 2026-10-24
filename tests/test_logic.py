@@ -114,8 +114,9 @@ def test_throttle_decoding():
     assert decode_throttled(0x50005) == ["under-voltage now", "throttled now", "under-voltage since boot", "throttled since boot"]
 
 
-def test_proton_exits_and_modes(tmp_path):
+def test_proton_exits_and_modes(tmp_path, monkeypatch):
     from travelpi import wg
+    monkeypatch.setattr(wg, "PREFERRED", ["sg", "jp", "us", "nl", "ch"])      # not whatever this router has saved
     from travelpi.net import build_modes
     for cc in ("us", "sg", "ch"):
         (tmp_path / f"proton-{cc}.conf").write_text("[Interface]\nAddress = 10.2.0.2/32, 2a07::2/128\n")
@@ -309,3 +310,92 @@ def test_settings_from_the_web_pages(tmp_path):
     f = tmp_path / "settings.json"
     save_settings(new, f)
     assert load_settings(f)["name"] == "Smith Router" and "junk" not in json.loads(f.read_text())
+
+
+def test_screen_found_by_name_not_number(tmp_path):
+    from travelpi.screen import find_fb
+    for n, name in ((0, "vc4drmfb"), (1, "fb_ili9486")):            # HDMI took fb0, the little screen is fb1
+        (tmp_path / f"fb{n}").mkdir()
+        (tmp_path / f"fb{n}" / "name").write_text(name + "\n")
+    assert find_fb(tmp_path) == "/dev/fb1"
+    assert find_fb(tmp_path / "nothing") == "/dev/fb0"
+
+
+def test_tv_remote_and_plex_items():
+    from travelpi import kodi, plexlib
+    assert kodi.fill({"playerid": "{player}", "value": {"step": "smallforward"}}, 1) == {"playerid": 1, "value": {"step": "smallforward"}}
+    with pytest.raises(ValueError):
+        kodi.fill({"playerid": "{player}"}, None)                      # nothing playing
+    with pytest.raises(ValueError):
+        kodi.press("rm -rf")
+    now = kodi.summarise_playing({"type": "episode", "showtitle": "Bluey", "season": 2, "episode": 5, "title": "Bike"},
+                                 {"time": {"hours": 0, "minutes": 3, "seconds": 7}, "totaltime": {"minutes": 7}, "percentage": 44.2, "speed": 0})
+    assert now == {"playing": True, "title": "Bluey · S02E05 · Bike", "kind": "episode", "paused": True, "time": 187, "total": 420, "percent": 44.2}
+    ep = plexlib.item({"ratingKey": 77, "type": "episode", "title": "Bike", "grandparentTitle": "Bluey", "parentIndex": 2, "index": 5,
+                       "grandparentThumb": "/library/metadata/12/thumb/1700", "duration": 420000, "viewOffset": 210000})
+    assert ep == {"key": "77", "type": "episode", "title": "Bike", "sub": "Bluey · S02E05", "thumb": "/library/metadata/12/thumb/1700",
+                  "playable": True, "progress": 50, "watched": False}
+    show = plexlib.item({"ratingKey": 12, "type": "show", "title": "Bluey", "year": 2018, "thumb": "http://evil/x.jpg", "viewCount": 3})
+    assert show["playable"] is False and show["thumb"] == "" and show["watched"] and show["sub"] == "2018"
+    for bad in ("/etc/passwd", "/library/metadata/1/thumb/2?X-Plex-Token=x", "http://x/library/metadata/1/thumb/2"):
+        with pytest.raises(ValueError):
+            plexlib.thumb(bad)
+    with pytest.raises(ValueError):
+        plexlib.stream("1; rm")
+
+
+def test_kodi_port_only_on_the_pi():
+    assert 'iifname != "lo" tcp dport 8080 drop' in fw.ruleset("tunnel")
+
+
+
+def test_jellyfin_items_and_channel_lists(tmp_path):
+    from travelpi import jellyfin, kodi
+    sid, eid = "a" * 32, "b" * 32
+    ep = jellyfin.item({"Id": eid, "Type": "Episode", "Name": "Bike", "SeriesName": "Bluey", "ParentIndexNumber": 2,
+                        "IndexNumber": 5, "SeriesId": sid, "SeriesPrimaryImageTag": "t",
+                        "UserData": {"PlayedPercentage": 49.6, "Played": False}})
+    assert ep == {"key": eid, "type": "episode", "title": "Bike", "sub": "Bluey · S02E05", "thumb": f"/Items/{sid}/Images/Primary",
+                  "playable": True, "progress": 50, "watched": False}
+    mv = jellyfin.item({"Id": sid, "Type": "Movie", "Name": "Up", "ProductionYear": 2009, "ImageTags": {}, "UserData": {"Played": True}})
+    assert mv["thumb"] == "" and mv["watched"] and mv["sub"] == "2009" and mv["type"] == "movie"
+    for bad in ("/Items/x/Images/Primary", "/Users/1/Items", f"/Items/{sid}/Images/Primary?api_key=x"):
+        with pytest.raises(ValueError):
+            jellyfin.thumb(bad)
+    with pytest.raises(ValueError):
+        jellyfin.stream("../../etc")
+    assert kodi.clean_lists(["languages/eng", "countries/au", "countries/au", "index"]) == ["languages/eng", "countries/au", "index"]
+    for bad in ([], ["../../x"], ["countries/au.m3u"], "countries/au", ["x"] * 13):
+        with pytest.raises(ValueError):
+            kodi.clean_lists(bad)
+    d = tmp_path / "iptv"
+    d.mkdir()
+    (d / "instance-settings-1.xml").write_text(kodi.instance_xml(1, "languages/eng"))
+    (d / "instance-settings-2.xml").write_text(kodi.instance_xml(2, "countries/za"))
+    assert kodi.current_lists(d) == ["languages/eng", "countries/za"]
+    assert "South Africa (iptv-org)" in kodi.instance_xml(2, "countries/za")
+
+
+def test_plex_block_message_and_pvr_selfheal():
+    from travelpi import plexlib
+    assert "Plex Pass" in plexlib.blocked_reason(403, "Downloading requires a Remote Watch Pass or Plex Pass.")
+    assert plexlib.blocked_reason(200, "") == "" and "HTTP 500" in plexlib.blocked_reason(500, "oops")
+
+
+def test_custom_iptv_source(tmp_path):
+    from travelpi import kodi
+    codes, custom = kodi.clean_sources(["countries/au"], {"name": "My IPTV", "m3u": "https://ex.com/list.m3u?token=a&b=1", "epg": ""})
+    assert codes == ["countries/au"] and custom["m3u"].endswith("b=1") and custom["name"] == "My IPTV"
+    for bad in ({"m3u": "not a url"}, {"m3u": "ftp://x/list.m3u"}, {"m3u": "https://x/l.m3u", "epg": "nope"}):
+        with pytest.raises(ValueError):
+            kodi.clean_sources([], bad)
+    with pytest.raises(ValueError):
+        kodi.clean_sources([], None)                                  # nothing at all
+    xml = kodi.instance_source(1, "My IPTV", "https://ex.com/l.m3u?a=1&b=2", "https://ex.com/epg.xml")
+    assert "&amp;" in xml and "epgUrl" in xml and "My IPTV" in xml            # & escaped, EPG set
+    d = tmp_path / "iptv"
+    kodi.set_sources(["countries/au"], {"name": "Mine", "m3u": "https://ex.com/l.m3u", "epg": ""}, d)
+    cur = kodi.current_sources(d)
+    assert cur["codes"] == ["countries/au"] and cur["custom"]["m3u"] == "https://ex.com/l.m3u" and cur["custom"]["name"] == "Mine"
+    kodi.set_sources(["countries/au"], None, d)                        # removing the custom one
+    assert kodi.current_sources(d)["custom"] is None

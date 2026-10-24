@@ -11,6 +11,7 @@ from typing import Any, Callable
 import qrcode
 from PIL import Image, ImageDraw, ImageFont
 
+from . import kodi
 from .config import NAME
 from .screen import H, W, calibrate_from
 
@@ -405,10 +406,10 @@ class App:
         c.text((130, 138), "http://10.42.0.1", 15, CYAN, mono=True)
         page = self.url_qr("http://10.42.0.1", 92)
         c.img.paste(page, (W - 100, 46))
-        bw = (W - 8 * 6) // 5
+        bw = (W - 8 * 7) // 6
         acts = [("Devices", self.open_devices, CYAN), ("Ad-block", lambda: self.go("adblock"), GREEN),
-                ("Speed", lambda: self.go("speed"), CYAN), ("Wi-Fi name", self.edit_ap, CYAN),
-                ("Power", lambda: self.go("power"), AMBER)]
+                ("Speed", lambda: self.go("speed"), CYAN), ("TV", lambda: self.go("tv"), GREEN),
+                ("Wi-Fi name", self.edit_ap, CYAN), ("Power", lambda: self.go("power"), AMBER)]
         for i, (label, fn, col) in enumerate(acts):
             x0 = 8 + i * (bw + 8)
             c.button((x0, 170, x0 + bw, 250), label, fn, col, size=14 if len(label) < 8 else 12)
@@ -590,6 +591,73 @@ class App:
         else:
             c.button((8, 200, W - 8, 300), "Run speed test", lambda: self.spawn(self.net.speedtest, lambda r: None), CYAN, filled=True,
                      sub="About 20 seconds")
+
+    # ----- TV remote: drives Kodi on the HDMI port (travelpi/kodi.py), same screen as the phone page/Sentinel -----
+
+    def tv_press(self, button: str) -> None:
+        self.spawn(lambda: kodi.press(button), lambda r: self.say(str(r)) if isinstance(r, Exception) else None)
+
+    def draw_tv(self, c: Canvas) -> None:
+        c.header("TV remote", lambda: self.go("more"))
+        tv = (self.net.state.get("hw") or {}).get("tv") or {}
+        if not tv.get("installed"):
+            c.text((W // 2, H // 2), "TV mode isn't installed on this router", 15, MUTED, anchor="mm")
+            return
+        if not tv.get("running"):
+            c.text((W // 2, 110), "TV mode is off" if tv.get("hdmi") else "No TV plugged in", 17, AMBER, bold=True, anchor="mm")
+            if tv.get("hdmi"):
+                c.button((110, 150, W - 110, 210), "Turn TV mode on",
+                         lambda: self.spawn(lambda: self.net.tv("start"),
+                                            lambda r: self.say(str(r) if isinstance(r, Exception) else "Starting Kodi on the TV…")),
+                         GREEN, filled=True)
+            return
+        # big D-pad on the left, a few large buttons on the right
+        cross = [("▲", "up", (98, 38, 212, 116)), ("◀", "left", (10, 120, 96, 214)),
+                 ("OK", "select", (98, 120, 212, 214)), ("▶", "right", (214, 120, 300, 214)),
+                 ("▼", "down", (98, 218, 212, 296))]
+        for label, btn, box in cross:
+            c.button(box, label, (lambda b=btn: self.tv_press(b)), CYAN, size=26 if label == "OK" else 50,
+                     filled=label == "OK")
+        for i, (label, btn, col) in enumerate([("Back", "back", GREEN), ("Play", "playpause", CYAN), ("Stop", "stop", RED)]):
+            y0 = 38 + i * 62
+            c.button((312, y0, W - 8, y0 + 54), label, (lambda b=btn: self.tv_press(b)), col, size=20)
+        c.button((312, 224, W - 8, 296), "Live TV", self.open_channels, AMBER, size=20)
+
+    def open_channels(self) -> None:
+        self.go("channels", chans=None, page=0, q="")
+        self.spawn(lambda: kodi.channels(self.args.get("q", "")),
+                   lambda r: self.args.update(chans=r if isinstance(r, list) else []))
+
+    def _chan_search(self, q: str) -> None:
+        self.go("channels", chans=None, page=0, q=q)
+        self.spawn(lambda: kodi.channels(q), lambda r: self.args.update(chans=r if isinstance(r, list) else []))
+
+    def draw_channels(self, c: Canvas) -> None:
+        c.header("Live TV", lambda: self.go("tv"))
+        q = self.args.get("q", "")
+        c.button((W - 92, 3, W - 4, 33), "Search" + (" *" if q else ""), lambda: self.keyboard(
+            "Search channels", q, self._chan_search, ok="Search", back=self.open_channels), CYAN, size=13)
+        chans = self.args.get("chans")
+        if chans is None:
+            c.text((W // 2, H // 2), "Loading channels…", 16, MUTED, anchor="mm")
+            return
+        if not chans:
+            c.text((W // 2, H // 2), "No match – tap Search" if q else "No channels yet", 16, MUTED, anchor="mm")
+            return
+        per, page = 6, self.args.get("page", 0)
+        for i, ch in enumerate(chans[page * per:(page + 1) * per]):
+            y0 = 40 + i * 44
+            box = (6, y0, W - 66, y0 + 40)
+            c.panel(box, edge=CYAN)
+            c.targets.append((box, (lambda ch=ch: self.spawn(lambda: kodi.play_channel(ch["id"]),
+                              lambda r: self.say(str(r) if isinstance(r, Exception) else f"Tuning {ch['name']}…")))))
+            c.text((16, y0 + 20), ch["name"], 15, BRIGHT, anchor="lm", maxw=W - 150)
+        pages = (len(chans) + per - 1) // per
+        if page > 0:
+            c.button((W - 58, 40, W - 6, 124), "▲", lambda: self.args.update(page=page - 1), CYAN)
+        if page < pages - 1:
+            c.button((W - 58, 188, W - 6, 272), "▼", lambda: self.args.update(page=page + 1), CYAN)
+        c.text((W - 32, 160), f"{page + 1}/{pages}", 12, MUTED, anchor="mm")
 
     def power(self, what: str) -> None:
         c = Canvas()

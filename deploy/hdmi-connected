@@ -1,0 +1,6 @@
+#!/bin/sh
+# Exit 0 when a TV/monitor is plugged into either HDMI port (kodi.service only starts then).
+for s in /sys/class/drm/card*-HDMI-A-*/status; do
+  [ -r "$s" ] && [ "$(cat "$s")" = connected ] && exit 0
+done
+exit 1

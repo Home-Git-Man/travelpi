@@ -25,6 +25,7 @@ from .config import (AP, AP_NET, TAILNET, BACKUP_AFTER, CHECK_EVERY, ETC, EXITS,
 log = logging.getLogger("travelpi.net")
 LOCAL_RULE = 4900          # ahead of Proton (5000) and Tailscale (5210+)
 TAILNET_RULE = 4950
+KODI_RULE = 4800           # Kodi's marked (0x33) internet traffic → the active exit's table
 USAGE_SAVE_EVERY = 300
 
 
@@ -173,6 +174,7 @@ class Net:
         self.speed: dict[str, Any] = self._load("speed.json", {})
         self.fw_key: tuple = ()
         self.offline_since = 0.0
+        self.kodi_table: str | None = None       # which routing table Kodi's traffic is sent to (None = main/direct)
         self.primary = self._load("primary.json", {}).get("ssid", "")   # hotel network we left for a backup
         self.backup_since = 0.0
         self.demoted: dict[str, float] = {}      # uplink device → when we pushed it down the route list
@@ -599,7 +601,22 @@ class Net:
                 log.info("exit: %s", ex["where"] if ex else "none")
             except Exception as e:
                 log.warning("couldn't switch to %s: %s", exit_id, e)
+        self._kodi_route(policy)
         self._set_dns(dns)
+
+    def _kodi_route(self, policy: str) -> None:
+        """Route Kodi's own internet traffic (IPTV, add-ons) through the active VPN exit, so geo-locked channels see the
+        VPN country instead of the Pi's uplink. Kodi's packets are marked 0x33 by the firewall (local/tailnet excluded);
+        here we point that mark at the exit's table – the Proton tunnel (51) or the Tailscale exit (52). Off otherwise."""
+        table = "51" if policy == "wg" else "52" if policy == "tunnel" else ""
+        if table == self.kodi_table:
+            return
+        for _ in range(3):                           # clear any existing fwmark rule first (idempotent)
+            run("ip", "rule", "del", "fwmark", "0x33")
+        if table:
+            run("ip", "rule", "add", "fwmark", "0x33", "lookup", table, "priority", str(KODI_RULE))
+        self.kodi_table = table
+        log.info("kodi exit routing: %s", table or "off (direct)")
 
     def _set_dns(self, dns: list[str]) -> None:
         if dns != self.dns:
@@ -806,6 +823,17 @@ class Net:
             if len(f) >= 2 and f[1] == "connected" and (f[0] in (UPLINK, *WIRED) or is_phone_dev(f[0])):
                 out.append(f[0])
         return out
+
+    def tv(self, action: str) -> None:
+        """Start or stop TV mode (Kodi on the HDMI port)."""
+        if action not in ("start", "stop"):
+            raise ValueError("start or stop")
+        if not os.path.exists("/etc/systemd/system/kodi.service"):
+            raise ValueError("TV mode isn't installed (deploy/kodi-install.sh)")
+        if action == "start" and subprocess.run(["/usr/local/sbin/hdmi-connected"]).returncode:
+            raise ValueError("Plug the router into a TV first (HDMI)")
+        run("systemctl", action, "kodi", timeout=30, check=True)
+        self.state["toast"] = "TV mode on" if action == "start" else "TV mode off"
 
     def settings_view(self) -> dict[str, Any]:
         """What the settings sections of the phone page and Sentinel show."""

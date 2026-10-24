@@ -1,0 +1,18 @@
+[Unit]
+Description=TV mode – Kodi on the HDMI port (Plex from home, world TV, USB films)
+After=network-online.target travelpi.service
+Wants=network-online.target
+
+[Service]
+User=kodi
+Group=kodi
+SupplementaryGroups=audio video render
+ExecCondition=/usr/local/sbin/hdmi-connected
+ExecStart=/usr/bin/kodi-standalone
+Restart=on-abort
+RestartSec=5
+TimeoutStopSec=20
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

@@ -17,6 +17,7 @@ from .config import AP, AP_NET, ETC, SETTINGS
 WG_DIR = ETC / "wg"
 IFACE = "wgx"
 TABLE = 51
+PRIO_ENDPOINT = 4700                      # the tunnel's own encrypted packets go out the uplink, never back into wgx
 PRIO_FROM, PRIO_OIF = 5000, 5001          # ahead of Tailscale's rules (5210+)
 COUNTRY = {"sg": "Singapore", "ch": "Switzerland", "nl": "Netherlands", "us": "United States", "jp": "Japan",
            "ro": "Romania", "pl": "Poland", "no": "Norway", "ca": "Canada", "mx": "Mexico", "de": "Germany",
@@ -122,7 +123,7 @@ def _ip(*args: str) -> subprocess.CompletedProcess:
 
 
 def down() -> None:
-    for prio in (PRIO_FROM, PRIO_OIF):
+    for prio in (PRIO_ENDPOINT, PRIO_FROM, PRIO_OIF):
         while _ip("rule", "del", "priority", str(prio)).returncode == 0:
             pass
     _ip("route", "flush", "table", str(TABLE))
@@ -138,6 +139,12 @@ def up(exit_: dict[str, Any]) -> None:
     if r.returncode:
         raise RuntimeError(r.stderr.strip())
     subprocess.run(["wg", "setconf", IFACE, "/dev/stdin"], input=stripped, text=True, check=True, timeout=10)
+    # The tunnel's own encrypted packets (to the Proton endpoint) inherit Kodi's 0x33 mark, so without this they'd match
+    # the fwmark rule and loop back into wgx instead of going out the uplink. Pin the endpoint to the main table first.
+    ep = subprocess.run(["wg", "show", IFACE, "endpoints"], capture_output=True, text=True, timeout=5).stdout
+    m = re.search(r"\s(\d{1,3}(?:\.\d{1,3}){3}):\d+", ep)
+    if m:
+        _ip("rule", "add", "to", m.group(1), "lookup", "main", "priority", str(PRIO_ENDPOINT))
     m = re.search(r"^\s*MTU\s*=\s*(\d+)", conf, re.M)
     for s in (["-4", "address", "add", address(conf), "dev", IFACE], ["link", "set", IFACE, "mtu", m.group(1) if m else "1420", "up"],
               ["route", "replace", "default", "dev", IFACE, "table", str(TABLE)],
