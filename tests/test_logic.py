@@ -427,3 +427,20 @@ def test_iptv_webplayer_parse_rewrite_and_ssrf():
     assert iptv.is_playlist("http://h/x", "application/vnd.apple.mpegurl", b"")
     assert iptv.is_playlist("http://h/x", "", b"#EXTM3U\n")
     assert not iptv.is_playlist("http://h/x.ts", "video/mp2t", b"\x47\x40\x00")
+
+
+def test_iptv_per_channel_headers():
+    from travelpi import iptv
+    m3u = ('#EXTM3U\n'
+           '#EXTINF:-1 http-referrer="https://vaughn.live/" http-user-agent="Chrome/83" group-title="Movies",Aneflix\n'
+           'http://host/a.m3u8\n'
+           '#EXTINF:-1 group-title="News",Plain\n'
+           '#EXTVLCOPT:http-user-agent=CustomUA/1.0\n'
+           '#EXTVLCOPT:http-referrer=https://ref.example/\n'
+           'http://host/b.m3u8\n')
+    ch = list(iptv.parse_m3u(m3u))
+    assert ch[0]["ua"] == "Chrome/83" and ch[0]["ref"] == "https://vaughn.live/"          # from EXTINF attrs
+    assert ch[1]["ua"] == "CustomUA/1.0" and ch[1]["ref"] == "https://ref.example/"        # from EXTVLCOPT lines
+    # channels without options carry no ua/ref keys
+    plain = list(iptv.parse_m3u('#EXTM3U\n#EXTINF:-1,X\nhttp://h/x.m3u8\n'))[0]
+    assert "ua" not in plain and "ref" not in plain

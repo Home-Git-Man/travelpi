@@ -80,15 +80,23 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 break
 
-    def _relay(self, url: str) -> None:
+    def _relay(self, url: str, ua: str = "", ref: str = "") -> None:
         """Relay an IPTV stream to the device: rewrite HLS playlists back through here, stream segments straight. The
-        upstream fetch goes over the VPN (iptv.open_url) and refuses local/private/tailnet addresses (SSRF guard)."""
+        upstream fetch goes over the VPN (iptv.open_url) and refuses local/private/tailnet addresses (SSRF guard).
+        `ua`/`ref` are the channel's required User-Agent/Referer (many streams 403 without them)."""
         if not url:
             return self._send(400, {"error": "no url"})
         fwd = {}
         rng = self.headers.get("Range")              # players use byte ranges for video/seeking – pass them upstream
         if rng:
             fwd["Range"] = rng
+        if ua:
+            fwd["User-Agent"] = ua
+        if ref:
+            fwd["Referer"] = ref
+            rp = urllib.parse.urlsplit(ref)
+            if rp.scheme and rp.netloc:
+                fwd["Origin"] = f"{rp.scheme}://{rp.netloc}"
         try:
             resp = iptv.open_url(url, timeout=15, headers=fwd)
         except ValueError as e:
@@ -104,7 +112,9 @@ class Handler(BaseHTTPRequestHandler):
                 is_pl = head.lstrip()[:7] == b"#EXTM3U"
             if is_pl:
                 text = (head + resp.read(6_000_000)).decode("utf-8", "replace")
-                prox = lambda u: "/tv/stream?u=" + urllib.parse.quote(u, safe="")
+                suffix = (("&ua=" + urllib.parse.quote(ua, safe="")) if ua else "") + \
+                         (("&ref=" + urllib.parse.quote(ref, safe="")) if ref else "")
+                prox = lambda u: "/tv/stream?u=" + urllib.parse.quote(u, safe="") + suffix
                 data = iptv.rewrite_playlist(text, resp.geturl(), prox).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/vnd.apple.mpegurl")
@@ -167,7 +177,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/tv/webchannels":
                 return self._send(200, {"channels": iptv.channels(qs.get("refresh") == "1")})
             if path == "/tv/stream":
-                return self._relay(qs.get("u", ""))
+                return self._relay(qs.get("u", ""), qs.get("ua", ""), qs.get("ref", ""))
             if path == "/hls.js":
                 return self._send(200, HLSJS.read_bytes(), "application/javascript; charset=utf-8")
         except ValueError as e:

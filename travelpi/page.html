@@ -681,7 +681,7 @@ async function loadWebGuide() {
     $("guide").innerHTML = list.map((c) => `<div class="guiderow">
       ${c.logo ? `<img class="num" loading="lazy" src="${esc(c.logo)}" alt="" onerror="this.style.visibility='hidden'" style="width:34px;height:24px;object-fit:contain">` : `<div class="num"></div>`}
       <div class="meta"><b>${esc(c.name)}</b>${c.group ? `<div class="nxt">${esc(c.group)}</div>` : ""}</div>
-      <button class="btn sm" data-url="${esc(c.url)}" data-title="${esc(c.name)}">Play</button></div>`).join("")
+      <button class="btn sm" data-url="${esc(c.url)}" data-title="${esc(c.name)}"${c.ua ? ` data-ua="${esc(c.ua)}"` : ""}${c.ref ? ` data-ref="${esc(c.ref)}"` : ""}>Play</button></div>`).join("")
       || `<p class="muted">${q ? "No channels match." : "No channels yet – add a list under “Channel lists” below."}</p>`;
     if (!q && webChannels.length > 300) $("guide").insertAdjacentHTML("beforeend", `<p class="help" style="margin-top:10px">Showing 300 of ${webChannels.length.toLocaleString()} – search to narrow.</p>`);
   } catch (e) { $("guide").innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
@@ -700,8 +700,11 @@ function stopWeb() {
   const v = $("webvideo"); if (v) { v.pause(); v.removeAttribute("src"); v.load(); }
   $("webplayer").hidden = true;
 }
-function playWeb(url, title) {
-  const prox = "/tv/stream?u=" + encodeURIComponent(url), v = $("webvideo");
+function playWeb(url, title, ua, ref) {
+  let prox = "/tv/stream?u=" + encodeURIComponent(url);
+  if (ua) prox += "&ua=" + encodeURIComponent(ua);
+  if (ref) prox += "&ref=" + encodeURIComponent(ref);
+  const v = $("webvideo");
   $("webtitle").textContent = title; $("webplayer").hidden = false;
   try { $("webplayer").scrollIntoView({ block: "nearest", behavior: "smooth" }); } catch {}
   if (window._hls) { try { window._hls.destroy(); } catch {} window._hls = null; }
@@ -952,7 +955,7 @@ document.addEventListener("click", async (e) => {
     else if (b.dataset.key) { await api("/api/tv/remote", { button: b.dataset.key }); setTimeout(loadNow, 600); return; }
     else if (b.dataset.livewhere) { liveWhere = b.dataset.livewhere; loadLive(); return; }
     else if (b.id === "livgo") { loadLive(); return; }
-    else if (b.dataset.url) { playWeb(b.dataset.url, b.dataset.title); return; }
+    else if (b.dataset.url) { playWeb(b.dataset.url, b.dataset.title, b.dataset.ua || "", b.dataset.ref || ""); return; }
     else if (b.id === "webclose") { stopWeb(); return; }
     else if (b.dataset.home) { srvStack = []; srvRender(); return; }
     else if (b.dataset.sec) { srvStack = [{ view: "section", key: b.dataset.sec, title: b.dataset.title }]; srvRender(); return; }

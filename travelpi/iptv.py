@@ -168,28 +168,39 @@ def open_url(url: str, timeout: float = 15, headers: dict[str, str] | None = Non
 
 
 # ---------- channel list (parsed from the configured m3u sources) ----------
-_LOGO = re.compile(r'tvg-logo="([^"]*)"')
-_GROUP = re.compile(r'group-title="([^"]*)"')
+_ATTR = {k: re.compile(k + r'="([^"]*)"') for k in ("tvg-logo", "group-title", "http-user-agent", "http-referrer")}
+
+
+def _attr(key: str, line: str) -> str:
+    m = _ATTR[key].search(line)
+    return m.group(1) if m else ""
 
 
 def parse_m3u(text: str) -> Iterator[dict[str, str]]:
-    name = logo = group = ""
+    """Channels with the per-channel headers many streams require (a browser user-agent, a referrer) – from the EXTINF
+    attributes and/or the #EXTVLCOPT lines. Without these a lot of (esp. US) channels 403 the request."""
+    name = logo = group = ua = ref = ""
     for line in text.splitlines():
         line = line.strip()
         if line.startswith("#EXTINF"):
-            logo = (_LOGO.search(line) or _NONE).group(1) if 'tvg-logo="' in line else ""
-            group = (_GROUP.search(line) or _NONE).group(1) if 'group-title="' in line else ""
+            logo, group = _attr("tvg-logo", line), _attr("group-title", line)
+            ua, ref = _attr("http-user-agent", line), _attr("http-referrer", line)
             name = line.split(",", 1)[1].strip() if "," in line else ""
+        elif line.startswith("#EXTVLCOPT") and "=" in line:
+            low, val = line.lower(), line.split("=", 1)[1].strip()
+            if "user-agent" in low:
+                ua = val
+            elif "referrer" in low or "referer" in low:
+                ref = val
         elif line and not line.startswith("#"):
             if name:
-                yield {"name": name, "logo": logo, "group": group, "url": line}
-            name = logo = group = ""
-
-
-class _NONE:                        # so a missing match still has .group(1) == ""
-    @staticmethod
-    def group(_: int) -> str:
-        return ""
+                ch = {"name": name, "logo": logo, "group": group, "url": line}
+                if ua:
+                    ch["ua"] = ua
+                if ref:
+                    ch["ref"] = ref
+                yield ch
+            name = logo = group = ua = ref = ""
 
 
 def source_urls() -> list[str]:
