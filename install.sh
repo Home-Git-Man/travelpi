@@ -82,12 +82,7 @@ say "6/6 TV mode (optional – plug the router into a hotel TV: your films and s
 TVMODE=n MEDIA=none MEDIA_URL="" MEDIA_KEY="" JF_USER=""
 if yes_no "Install TV mode (Kodi on the HDMI port)?" n; then
   TVMODE=y
-  case "$(ask "Media server at home: plex, jellyfin or none" "none")" in
-    [Pp]*) MEDIA=plex
-      warn "The router reaches it over Tailscale – use the server's Tailscale address."
-      MEDIA_URL=$(ask "Plex address, e.g. http://100.x.y.z:32400" "")
-      echo "Plex token: in Plex Web open any film → ⋯ → Get Info → View XML; the token is X-Plex-Token=… in the address bar."
-      MEDIA_KEY=$(ask "Plex token" "") ;;
+  case "$(ask "Media server at home: jellyfin or none" "none")" in
     [Jj]*) MEDIA=jellyfin
       warn "The router reaches it over Tailscale – use the server's Tailscale address."
       MEDIA_URL=$(ask "Jellyfin address, e.g. http://100.x.y.z:8096" "")
@@ -158,9 +153,7 @@ fi
 printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' > /etc/apt/apt.conf.d/20auto-upgrades
 
 # TV mode: media server login (root-only files, never shown in a browser)
-if [ "$MEDIA" = plex ] && [ -n "$MEDIA_URL" ] && [ -n "$MEDIA_KEY" ]; then
-  (umask 077; printf 'PLEX_URL=%s\nPLEX_TOKEN=%s\n' "${MEDIA_URL%/}" "$MEDIA_KEY" > "$ETC/plex.env")
-elif [ "$MEDIA" = jellyfin ] && [ -n "$MEDIA_URL" ] && [ -n "$MEDIA_KEY" ]; then
+if [ "$MEDIA" = jellyfin ] && [ -n "$MEDIA_URL" ] && [ -n "$MEDIA_KEY" ]; then
   JF_ID=$(python3 - "${MEDIA_URL%/}" "$MEDIA_KEY" "$JF_USER" <<'PY2'
 import json, sys, urllib.request
 url, key, name = sys.argv[1:4]
