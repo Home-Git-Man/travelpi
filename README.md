@@ -54,7 +54,10 @@ create an API key in Jellyfin → Dashboard → API Keys.
 ## On the road
 
 1. Plug in the Pi. Your devices join the travel Wi-Fi automatically.
-2. On the screen or phone page: **Wi-Fi → Scan → Join** the hotel's network.
+2. Connect the Pi to the venue's internet, either way:
+   - **Wi-Fi** – on the screen or phone page: **Wi-Fi → Scan → Join** the hotel's network, or
+   - **Ethernet** – plug a cable from the room's wired socket into the Pi's LAN port. No network to pick; it's used
+     automatically and preferred over Wi-Fi.
 3. If it has a sign-in page: **Hotel login → Start**, sign in on your phone, done.
 4. The status shows **PROTECTED** with the VPN's country. Red **NOT PROTECTED** means Direct mode (no VPN).
 

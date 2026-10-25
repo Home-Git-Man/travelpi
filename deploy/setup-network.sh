@@ -80,6 +80,29 @@ address1=10.42.0.1/24
 method=disabled
 CONF
 chmod 600 /etc/NetworkManager/system-connections/travel-ap.nmconnection
+
+# 4b. wired uplink: plug the Pi's Ethernet port into a venue's wired socket (hotel room, caravan park, office guest
+#     port) instead of – or alongside – the USB Wi-Fi. DHCP, no "join" step (just plug in). Preferred over Wi-Fi when a
+#     cable is in (metric 100 < hotel Wi-Fi 600 < phone-USB 700). IPv6 off so nothing escapes the IPv4-only VPN.
+#     autoconnect-priority 50 wins over the stock netplan-eth0 profile (which also leaves IPv6 on).
+cat > /etc/NetworkManager/system-connections/uplink-ethernet.nmconnection <<CONF
+[connection]
+id=uplink-ethernet
+uuid=7c2e9b14-3a6d-4e21-b8f0-1a2b3c4d5e6f
+type=ethernet
+interface-name=eth0
+autoconnect=true
+autoconnect-priority=50
+
+[ipv4]
+method=auto
+route-metric=100
+
+[ipv6]
+method=disabled
+CONF
+chmod 600 /etc/NetworkManager/system-connections/uplink-ethernet.nmconnection
+
 # the real name and password go in through nmcli, which handles spaces and symbols correctly
 nmcli con reload
 nmcli con modify travel-ap 802-11-wireless.ssid "$SSID" wifi-sec.psk "$PSK"
