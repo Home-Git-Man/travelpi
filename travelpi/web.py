@@ -85,8 +85,12 @@ class Handler(BaseHTTPRequestHandler):
         upstream fetch goes over the VPN (iptv.open_url) and refuses local/private/tailnet addresses (SSRF guard)."""
         if not url:
             return self._send(400, {"error": "no url"})
+        fwd = {}
+        rng = self.headers.get("Range")              # players use byte ranges for video/seeking – pass them upstream
+        if rng:
+            fwd["Range"] = rng
         try:
-            resp = iptv.open_url(url, timeout=15)
+            resp = iptv.open_url(url, timeout=15, headers=fwd)
         except ValueError as e:
             return self._send(400, {"error": str(e)})
         except Exception as e:                       # upstream timeout / DNS / TLS – the channel is just down
@@ -110,13 +114,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
                 return
-            self.send_response(resp.status)
+            self.send_response(resp.status)         # 206 when the player asked for a byte range
             self.send_header("Content-Type", ctype or "video/mp2t")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Cache-Control", "no-store")
-            cl = resp.headers.get("Content-Length")
-            if cl:
-                self.send_header("Content-Length", cl)
+            for hdr in ("Content-Length", "Content-Range", "Accept-Ranges"):
+                v = resp.headers.get(hdr)
+                if v:
+                    self.send_header(hdr, v)
             self.end_headers()
             if head:
                 self.wfile.write(head)

@@ -83,13 +83,16 @@ class _HTTPSHandler(urllib.request.HTTPSHandler):
 _opener = urllib.request.build_opener(_HTTPHandler, _HTTPSHandler)
 
 
-def open_url(url: str, timeout: float = 15) -> Any:
+def open_url(url: str, timeout: float = 15, headers: dict[str, str] | None = None) -> Any:
     """Open an http(s) URL over the VPN (fwmark 0x33), refusing local/private/tailnet destinations. Follows redirects
-    (each hop is re-checked in connect())."""
+    (each hop is re-checked in connect()). `headers` adds request headers (e.g. a Range forwarded from the player)."""
     p = urllib.parse.urlsplit(url)
     if p.scheme not in ("http", "https") or not p.hostname or _blocked(p.hostname):
         raise ValueError("blocked url")
-    return _opener.open(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=timeout)
+    h = {"User-Agent": UA}
+    if headers:
+        h.update(headers)
+    return _opener.open(urllib.request.Request(url, headers=h), timeout=timeout)
 
 
 # ---------- channel list (parsed from the configured m3u sources) ----------
