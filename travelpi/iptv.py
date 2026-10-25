@@ -10,9 +10,9 @@ import http.client
 import ipaddress
 import re
 import socket
+import threading
 import time
 import urllib.parse
-import urllib.request
 from typing import Any, Iterator
 
 from . import kodi
@@ -70,29 +70,101 @@ class _HTTPSConn(http.client.HTTPSConnection):
         self.sock = self._context.wrap_socket(_sock((self.host, self.port), self.timeout), server_hostname=self.host)
 
 
-class _HTTPHandler(urllib.request.HTTPHandler):
-    def http_open(self, req: Any) -> Any:
-        return self.do_open(_HTTPConn, req)
+# ---- keep-alive connection pool: reuse the upstream TLS connection across segments, so each one doesn't pay a fresh
+#      handshake over the VPN (the big cause of slow buffering). Per (scheme,host,port), thread-safe. ----
+_POOL: dict[tuple, list] = {}
+_POOL_LOCK = threading.Lock()
+_POOL_MAX = 6
 
 
-class _HTTPSHandler(urllib.request.HTTPSHandler):
-    def https_open(self, req: Any) -> Any:
-        return self.do_open(_HTTPSConn, req)
+def _conn_for(key: tuple, timeout: float) -> tuple[Any, bool]:
+    with _POOL_LOCK:
+        pool = _POOL.get(key)
+        if pool:
+            return pool.pop(), True
+    scheme, host, port = key
+    cls = _HTTPSConn if scheme == "https" else _HTTPConn
+    return cls(host, port, timeout=timeout), False
 
 
-_opener = urllib.request.build_opener(_HTTPHandler, _HTTPSHandler)
+def _release(key: tuple, conn: Any, resp: Any) -> None:
+    try:                                          # only a fully-read, keep-alive connection is safe to reuse
+        reusable = resp.isclosed() and not resp.will_close
+    except Exception:
+        reusable = False
+    if reusable:
+        with _POOL_LOCK:
+            pool = _POOL.setdefault(key, [])
+            if len(pool) < _POOL_MAX:
+                pool.append(conn)
+                return
+    try:
+        conn.close()
+    except OSError:
+        pass
 
 
-def open_url(url: str, timeout: float = 15, headers: dict[str, str] | None = None) -> Any:
-    """Open an http(s) URL over the VPN (fwmark 0x33), refusing local/private/tailnet destinations. Follows redirects
-    (each hop is re-checked in connect()). `headers` adds request headers (e.g. a Range forwarded from the player)."""
+class _Resp:
+    """Minimal response wrapper: returns its connection to the pool when closed (if the body was fully read)."""
+    def __init__(self, conn: Any, resp: Any, key: tuple, url: str) -> None:
+        self._conn, self._resp, self._key, self._url = conn, resp, key, url
+        self.status = resp.status
+        self.headers = resp.headers
+
+    def read(self, n: int = -1) -> bytes:
+        return self._resp.read() if n is None or n < 0 else self._resp.read(n)
+
+    def geturl(self) -> str:
+        return self._url
+
+    def close(self) -> None:
+        _release(self._key, self._conn, self._resp)
+
+    def __enter__(self) -> "_Resp":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
+
+
+def open_url(url: str, timeout: float = 15, headers: dict[str, str] | None = None, _depth: int = 0) -> _Resp:
+    """Open an http(s) URL over the VPN (fwmark 0x33), refusing local/private/tailnet destinations. Reuses pooled
+    keep-alive connections, follows redirects (each re-checked), and forwards extra `headers` (e.g. a Range)."""
     p = urllib.parse.urlsplit(url)
     if p.scheme not in ("http", "https") or not p.hostname or _blocked(p.hostname):
         raise ValueError("blocked url")
-    h = {"User-Agent": UA}
+    port = p.port or (443 if p.scheme == "https" else 80)
+    path = (p.path or "/") + ("?" + p.query if p.query else "")
+    h = {"User-Agent": UA, "Accept": "*/*", "Connection": "keep-alive"}
     if headers:
         h.update(headers)
-    return _opener.open(urllib.request.Request(url, headers=h), timeout=timeout)
+    key = (p.scheme, p.hostname, port)
+    conn = resp = None
+    for attempt in (0, 1):                        # a pooled socket may be stale – one retry with a fresh connection
+        conn, pooled = _conn_for(key, timeout)
+        try:
+            conn.request("GET", path, headers=h)
+            resp = conn.getresponse()
+            break
+        except Exception:
+            try:
+                conn.close()
+            except OSError:
+                pass
+            if pooled and attempt == 0:
+                continue
+            raise
+    if resp.status in (301, 302, 303, 307, 308) and _depth < 5:
+        loc = resp.headers.get("Location")
+        try:
+            resp.read()
+        except Exception:
+            pass
+        _release(key, conn, resp)
+        if not loc:
+            raise ValueError("redirect without location")
+        return open_url(urllib.parse.urljoin(url, loc), timeout, headers, _depth + 1)
+    return _Resp(conn, resp, key, url)
 
 
 # ---------- channel list (parsed from the configured m3u sources) ----------
