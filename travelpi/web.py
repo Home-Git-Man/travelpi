@@ -17,12 +17,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from . import kodi, library
+from . import iptv, kodi, library
 from .config import AP_NET, ETC, NAME, WEB_PORT
 from .wg import COUNTRY
 
 log = logging.getLogger("travelpi.web")
 PAGE = Path(__file__).with_name("page.html")
+HLSJS = Path(__file__).with_name("hls.min.js")
 LOCAL = ipaddress.ip_network(AP_NET)
 
 
@@ -69,6 +70,62 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _pump(self, resp: Any) -> None:
+        while True:
+            chunk = resp.read(65536)
+            if not chunk:
+                break
+            try:
+                self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                break
+
+    def _relay(self, url: str) -> None:
+        """Relay an IPTV stream to the device: rewrite HLS playlists back through here, stream segments straight. The
+        upstream fetch goes over the VPN (iptv.open_url) and refuses local/private/tailnet addresses (SSRF guard)."""
+        if not url:
+            return self._send(400, {"error": "no url"})
+        try:
+            resp = iptv.open_url(url, timeout=15)
+        except ValueError as e:
+            return self._send(400, {"error": str(e)})
+        except Exception as e:                       # upstream timeout / DNS / TLS – the channel is just down
+            return self._send(502, {"error": str(e)[:120]})
+        try:
+            ctype = resp.headers.get("Content-Type", "")
+            head = b""
+            is_pl = url.split("?")[0].lower().endswith((".m3u8", ".m3u")) or "mpegurl" in ctype.lower()
+            if not is_pl:                            # peek: a playlist served with a generic type/extension
+                head = resp.read(64)
+                is_pl = head.lstrip()[:7] == b"#EXTM3U"
+            if is_pl:
+                text = (head + resp.read(6_000_000)).decode("utf-8", "replace")
+                prox = lambda u: "/tv/stream?u=" + urllib.parse.quote(u, safe="")
+                data = iptv.rewrite_playlist(text, resp.geturl(), prox).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/vnd.apple.mpegurl")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            self.send_response(resp.status)
+            self.send_header("Content-Type", ctype or "video/mp2t")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            cl = resp.headers.get("Content-Length")
+            if cl:
+                self.send_header("Content-Length", cl)
+            self.end_headers()
+            if head:
+                self.wfile.write(head)
+            self._pump(resp)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            resp.close()
+
     def _ok(self, change: bool = False) -> bool:
         ip = self.client_address[0]
         if not allowed(ip, self.headers.get("X-Token", ""), self.token):
@@ -102,6 +159,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/library/thumb":
                 data, ctype = library.thumb(qs.get("path", ""))
                 return self._send(200, data, ctype)
+            if path == "/api/tv/webchannels":
+                return self._send(200, {"channels": iptv.channels(qs.get("refresh") == "1")})
+            if path == "/tv/stream":
+                return self._relay(qs.get("u", ""))
+            if path == "/hls.js":
+                return self._send(200, HLSJS.read_bytes(), "application/javascript; charset=utf-8")
         except ValueError as e:
             return self._send(400, {"error": str(e)})
         if path == "/":

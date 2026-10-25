@@ -18,6 +18,8 @@ the local Wi-Fi for you and keeps everyone behind a VPN with a kill switch.
 - **TV mode** (optional): plug the router into the hotel TV and run it from the phone page's remote – your films and
   shows from **Jellyfin** at home (played directly, full quality, picks up where you left off) and free TV
   channels from around the world (iptv-org's public list – pick countries, languages or News/Kids/Sport).
+- **Watch on your device**: on the phone page, Live TV → *On this device* plays the TV channels right in your
+  browser (phone, tablet, laptop – any OS), relayed through the Pi and the VPN. No TV needed.
 
 ## What you need
 

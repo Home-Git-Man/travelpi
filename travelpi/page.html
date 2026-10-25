@@ -303,13 +303,17 @@
 
           <!-- ---- Live TV ---- -->
           <div class="mtab" id="mtab-live" hidden>
-            <div class="card"><div class="ct"><b>TV guide</b><span class="ic">LIVE</span></div>
+            <div class="card"><div class="ct"><b>TV guide</b><span class="ic" id="livewhere-wrap"><span class="seg"><button class="on" data-livewhere="tv">On TV</button><button data-livewhere="here">On this device</button></span></span></div>
+              <div id="webplayer" hidden style="margin:2px 0 14px">
+                <video id="webvideo" controls playsinline style="width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;display:block"></video>
+                <div class="row" style="margin-top:7px;align-items:center"><b id="webtitle" style="flex:1;min-width:0;color:var(--bright);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></b><button class="btn sm ghost" id="webclose">Close</button></div>
+              </div>
               <div class="row" style="gap:8px"><select id="tvfilter" style="flex:2 1 150px"><option value="">All channels</option></select>
                 <input id="livq" placeholder="Search channels…" autocapitalize="off" autocorrect="off" style="flex:3 1 150px">
                 <button class="btn sm" id="livgo">Search</button></div>
               <div id="guide"><p class="muted" style="margin-top:12px">Loading channels…</p></div>
               <details id="tvlistbox"><summary>Channel lists &amp; your own IPTV</summary><div class="stack" id="tvlists"><p class="muted">Loading…</p></div></details>
-              <p class="help">Free TV channels from around the world (iptv-org). Some channels only play from their own country – a VPN country (or Home) helps.</p>
+              <p class="help">Free TV channels from around the world (iptv-org). <b>On TV</b> plays on the HDMI TV (Kodi); <b>On this device</b> plays here in your browser, through the VPN. Some channels only play from their own country – a VPN country (or Home) helps.</p>
             </div>
           </div>
 
@@ -424,6 +428,7 @@ function showPane(name) {
   document.querySelectorAll("#nav button").forEach((b) => b.classList.toggle("on", b.dataset.nav === name));
   $("pagetitle").textContent = TITLES[name] || "TravelPi";
   window.scrollTo(0, 0);
+  if (name !== "media") stopWeb();
   if (name === "media") { loadNow(); showMtab(mtab); }
   if (name === "wifi" && $("nets").childElementCount === 0) scan();
   if (name === "network") showBlocked();
@@ -577,6 +582,7 @@ function renderVpns(s) {
   }
 }
 let mtab = "remote", remStyle = "clickpad", plexOn = false, libName = "", lastNow = null, mediaInit = false;
+let liveWhere = "tv", webChannels = null;
 let srvStack = [], srvSections = [];
 async function loadNow() {
   try {
@@ -593,10 +599,11 @@ async function loadNow() {
 /* ---- media sub-tabs ---- */
 function showMtab(name) {
   mtab = name;
+  if (name !== "live") stopWeb();
   document.querySelectorAll("#mediatabs button").forEach((b) => b.classList.toggle("on", b.dataset.mtab === name));
   ["remote", "live", "server"].forEach((k) => $("mtab-" + k).hidden = k !== name);
   if (name === "remote") renderRemote();
-  if (name === "live") { if (!$("tvfilter").dataset.loaded) loadGroups(); loadGuide(); }
+  if (name === "live") { if (!$("tvfilter").dataset.loaded) loadGroups(); loadLive(); }
   if (name === "server") { srvStack = []; srvRender(); }
 }
 
@@ -659,6 +666,57 @@ async function loadGuide() {
       <button class="btn sm" data-chan="${c.id}">Watch</button></div>`).join("")
       || `<p class="muted">${$("livq").value || $("tvfilter").value ? "No channels match." : "No channels yet – Kodi loads the list the first time TV mode starts (give it a minute)."}</p>`;
   } catch (e) { $("guide").innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
+}
+function loadLive() {        // "On TV" = Kodi guide + tune; "On this device" = browser player
+  document.querySelectorAll("#livewhere-wrap .seg button").forEach((b) => b.classList.toggle("on", b.dataset.livewhere === liveWhere));
+  $("tvfilter").style.display = liveWhere === "tv" ? "" : "none";
+  if (liveWhere === "tv") { stopWeb(); loadGuide(); } else loadWebGuide();
+}
+async function loadWebGuide() {
+  $("guide").innerHTML = `<p class="muted" style="margin-top:12px">Loading channels…</p>`;
+  try {
+    if (!webChannels) webChannels = (await api("/api/tv/webchannels")).channels || [];
+    const q = $("livq").value.trim().toLowerCase();
+    const list = (q ? webChannels.filter((c) => c.name.toLowerCase().includes(q)) : webChannels).slice(0, 300);
+    $("guide").innerHTML = list.map((c) => `<div class="guiderow">
+      ${c.logo ? `<img class="num" loading="lazy" src="${esc(c.logo)}" alt="" onerror="this.style.visibility='hidden'" style="width:34px;height:24px;object-fit:contain">` : `<div class="num"></div>`}
+      <div class="meta"><b>${esc(c.name)}</b>${c.group ? `<div class="nxt">${esc(c.group)}</div>` : ""}</div>
+      <button class="btn sm" data-url="${esc(c.url)}" data-title="${esc(c.name)}">Play</button></div>`).join("")
+      || `<p class="muted">${q ? "No channels match." : "No channels yet – add a list under “Channel lists” below."}</p>`;
+    if (!q && webChannels.length > 300) $("guide").insertAdjacentHTML("beforeend", `<p class="help" style="margin-top:10px">Showing 300 of ${webChannels.length.toLocaleString()} – search to narrow.</p>`);
+  } catch (e) { $("guide").innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
+}
+function ensureHls(cb) {
+  if (window.Hls) return cb();
+  if (window._hlsQ) { window._hlsQ.push(cb); return; }
+  window._hlsQ = [cb];
+  const s = document.createElement("script"); s.src = "/hls.js";
+  s.onload = () => { const q = window._hlsQ || []; window._hlsQ = null; q.forEach((f) => f()); };
+  s.onerror = () => { window._hlsQ = null; toast("Couldn't load the player"); };
+  document.head.appendChild(s);
+}
+function stopWeb() {
+  if (window._hls) { try { window._hls.destroy(); } catch {} window._hls = null; }
+  const v = $("webvideo"); if (v) { v.pause(); v.removeAttribute("src"); v.load(); }
+  $("webplayer").hidden = true;
+}
+function playWeb(url, title) {
+  const prox = "/tv/stream?u=" + encodeURIComponent(url), v = $("webvideo");
+  $("webtitle").textContent = title; $("webplayer").hidden = false;
+  try { $("webplayer").scrollIntoView({ block: "nearest", behavior: "smooth" }); } catch {}
+  if (window._hls) { try { window._hls.destroy(); } catch {} window._hls = null; }
+  if (v.canPlayType("application/vnd.apple.mpegurl")) {          // Safari / iOS play HLS natively
+    v.src = prox; v.play().catch(() => {});
+    return;
+  }
+  ensureHls(() => {
+    if (window.Hls && Hls.isSupported()) {
+      const h = new Hls({ maxBufferLength: 12, liveSyncDurationCount: 3, manifestLoadingTimeOut: 15000 });
+      window._hls = h; h.loadSource(prox); h.attachMedia(v);
+      h.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
+      h.on(Hls.Events.ERROR, (_e, d) => { if (d.fatal) toast("This channel didn’t play – try another."); });
+    } else { v.src = prox; v.play().catch(() => toast("This browser can’t play the stream")); }
+  });
 }
 
 /* ---- media server (jellyfin-style) ---- */
@@ -889,7 +947,10 @@ document.addEventListener("click", async (e) => {
     else if (b.dataset.mtab) return showMtab(b.dataset.mtab);
     else if (b.dataset.rstyle) { remStyle = b.dataset.rstyle; renderRemote(); return; }
     else if (b.dataset.key) { await api("/api/tv/remote", { button: b.dataset.key }); setTimeout(loadNow, 600); return; }
-    else if (b.id === "livgo") { loadGuide(); return; }
+    else if (b.dataset.livewhere) { liveWhere = b.dataset.livewhere; loadLive(); return; }
+    else if (b.id === "livgo") { loadLive(); return; }
+    else if (b.dataset.url) { playWeb(b.dataset.url, b.dataset.title); return; }
+    else if (b.id === "webclose") { stopWeb(); return; }
     else if (b.dataset.home) { srvStack = []; srvRender(); return; }
     else if (b.dataset.sec) { srvStack = [{ view: "section", key: b.dataset.sec, title: b.dataset.title }]; srvRender(); return; }
     else if (b.id === "srvgo") { srvStack = [{ view: "search", key: "", title: "Search results" }]; srvRender(); return; }
@@ -958,7 +1019,7 @@ $("vpnfile").addEventListener("change", () => {    // guess the country from the
 });
 $("tvlistbox").addEventListener("toggle", () => { if ($("tvlistbox").open) loadLists(); });
 $("tvfilter").addEventListener("change", loadGuide);
-$("livq").addEventListener("keydown", (e) => { if (e.key === "Enter") loadGuide(); });
+$("livq").addEventListener("keydown", (e) => { if (e.key === "Enter") loadLive(); });
 $("srvq").addEventListener("keydown", (e) => { if (e.key === "Enter") { srvStack = [{ view: "search", key: "", title: "Search results" }]; srvRender(); } });
 $("credit").innerHTML = `Designed by <b>${esc(BRAND)}</b> <span class="sp">//</span> TravelPi`;
 refresh(); loadDevices(); loadAp();

@@ -399,3 +399,31 @@ def test_custom_iptv_source(tmp_path):
     assert cur["codes"] == ["countries/au"] and cur["custom"]["m3u"] == "https://ex.com/l.m3u" and cur["custom"]["name"] == "Mine"
     kodi.set_sources(["countries/au"], None, d)                        # removing the custom one
     assert kodi.current_sources(d)["custom"] is None
+
+
+def test_iptv_webplayer_parse_rewrite_and_ssrf():
+    from travelpi import iptv
+    m3u = ('#EXTM3U\n'
+           '#EXTINF:-1 tvg-logo="http://l/cnn.png" group-title="News",CNN HD\n'
+           'http://host/live/cnn/index.m3u8\n'
+           '#EXTINF:-1 group-title="Sport",ESPN\n'
+           'http://host/espn.ts\n')
+    ch = list(iptv.parse_m3u(m3u))
+    assert ch[0] == {"name": "CNN HD", "logo": "http://l/cnn.png", "group": "News", "url": "http://host/live/cnn/index.m3u8"}
+    assert ch[1]["name"] == "ESPN" and ch[1]["logo"] == "" and ch[1]["url"] == "http://host/espn.ts"
+
+    pl = ('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\n720/index.m3u8\n'
+          '#EXT-X-KEY:METHOD=AES-128,URI="key.bin"\nseg1.ts\n')
+    rw = iptv.rewrite_playlist(pl, "https://cdn.example.com/a/master.m3u8", lambda u: "/tv/stream?u=" + u)
+    assert "/tv/stream?u=https://cdn.example.com/a/720/index.m3u8" in rw          # variant playlist → relative resolved
+    assert 'URI="/tv/stream?u=https://cdn.example.com/a/key.bin"' in rw           # key URI rewritten
+    assert "/tv/stream?u=https://cdn.example.com/a/seg1.ts" in rw                 # segment rewritten
+    assert "#EXT-X-STREAM-INF:BANDWIDTH=1" in rw                                  # plain tags untouched
+
+    # SSRF guard: never relay to the home LAN, loopback, link-local or the tailnet
+    for host in ("127.0.0.1", "192.168.1.5", "169.254.1.1", "100.64.0.1"):
+        assert iptv._blocked(host)
+    assert iptv.is_playlist("http://h/x.m3u8", "", b"")
+    assert iptv.is_playlist("http://h/x", "application/vnd.apple.mpegurl", b"")
+    assert iptv.is_playlist("http://h/x", "", b"#EXTM3U\n")
+    assert not iptv.is_playlist("http://h/x.ts", "video/mp2t", b"\x47\x40\x00")
