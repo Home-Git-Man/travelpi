@@ -705,9 +705,11 @@ function playWeb(url, title) {
   $("webtitle").textContent = title; $("webplayer").hidden = false;
   try { $("webplayer").scrollIntoView({ block: "nearest", behavior: "smooth" }); } catch {}
   if (window._hls) { try { window._hls.destroy(); } catch {} window._hls = null; }
-  // Prefer hls.js (its own transmux via MSE) on any device that supports it – including iPad/Mac Safari – because
-  // Safari's native HLS plays some relayed streams as audio-only. Native HLS is the fallback only when MSE isn't there.
-  ensureHls(() => {
+  if (v.canPlayType("application/vnd.apple.mpegurl")) {            // Safari / iOS – native HLS (works best here)
+    v.src = prox; v.play().catch(() => {});
+    return;
+  }
+  ensureHls(() => {                                                // Chrome / Edge / Android / Firefox – hls.js
     if (window.Hls && Hls.isSupported()) {
       const h = new Hls({ maxBufferLength: 24, maxMaxBufferLength: 60, backBufferLength: 10, liveSyncDurationCount: 4,
         lowLatencyMode: false, abrEwmaDefaultEstimate: 1000000,
@@ -716,9 +718,7 @@ function playWeb(url, title) {
       window._hls = h; h.loadSource(prox); h.attachMedia(v);
       h.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
       h.on(Hls.Events.ERROR, (_e, d) => { if (d.fatal) toast("This channel didn’t play – try another."); });
-    } else if (v.canPlayType("application/vnd.apple.mpegurl")) {   // old iPhones without MSE – native HLS
-      v.src = prox; v.play().catch(() => {});
-    } else { toast("This browser can’t play the stream"); }
+    } else { v.src = prox; v.play().catch(() => toast("This browser can’t play the stream")); }
   });
 }
 
